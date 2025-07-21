@@ -28,6 +28,11 @@
           "maximum": 65535,
           "description": "The port number for the MCP server"
         },
+        "vscode-mcp-server.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host address for the MCP server"
+        },
         "vscode-mcp-server.defaultEnabled": {
           "type": "boolean",
           "default": false,
@@ -48,7 +53,7 @@
               "description": "Enable file operations tools (read, write, list files)"
             },
             "edit": {
-              "type": "boolean", 
+              "type": "boolean",
               "description": "Enable file editing tools (create, edit, delete files)"
             },
             "shell": {

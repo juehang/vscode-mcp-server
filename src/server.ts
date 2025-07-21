@@ -25,6 +25,7 @@ export class MCPServer {
     private app: express.Application;
     private httpServer?: Server;
     private port: number;
+    private host: string;
     private fileListingCallback?: FileListingCallback;
     private terminal?: vscode.Terminal;
     private toolConfig: ToolConfiguration;
@@ -33,8 +34,9 @@ export class MCPServer {
         this.fileListingCallback = callback;
     }
 
-    constructor(port: number = 3000, terminal?: vscode.Terminal, toolConfig?: ToolConfiguration) {
+    constructor(port: number = 3000, host: string = '127.0.0.1', terminal?: vscode.Terminal, toolConfig?: ToolConfiguration) {
         this.port = port;
+        this.host = host;
         this.terminal = terminal;
         this.toolConfig = toolConfig || {
             file: true,
@@ -228,7 +230,7 @@ export class MCPServer {
             
             return new Promise((resolve) => {
                 // Bind to localhost only for security
-                this.httpServer = this.app.listen(this.port, '127.0.0.1', () => {
+                this.httpServer = this.app.listen(this.port, this.host, () => {
                     const httpStartTime = Date.now() - httpServerStartTime;
                     logger.info(`[MCPServer.start] HTTP Server started (took ${httpStartTime}ms)`);
                     logger.info(`MCP Server listening on localhost:${this.port}`);
