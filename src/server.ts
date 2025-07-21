@@ -233,7 +233,7 @@ export class MCPServer {
                 this.httpServer = this.app.listen(this.port, this.host, () => {
                     const httpStartTime = Date.now() - httpServerStartTime;
                     logger.info(`[MCPServer.start] HTTP Server started (took ${httpStartTime}ms)`);
-                    logger.info(`MCP Server listening on localhost:${this.port}`);
+                    logger.info(`MCP Server listening on ${this.host}:${this.port}`);
                     
                     const totalTime = Date.now() - startTime;
                     logger.info(`[MCPServer.start] Server startup complete (total: ${totalTime}ms)`);
