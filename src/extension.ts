@@ -85,6 +85,7 @@ async function toggleServerState(context: vscode.ExtensionContext): Promise<void
     
     const config = vscode.workspace.getConfiguration('vscode-mcp-server');
     const port = config.get<number>('port') || 3000;
+    const host = config.get<string>('host') || '127.0.0.1';
     
     // Update status bar immediately to provide feedback
     updateStatusBar(port);
@@ -95,7 +96,7 @@ async function toggleServerState(context: vscode.ExtensionContext): Promise<void
             logger.info(`[toggleServerState] Creating MCP server instance`);
             const terminal = getExtensionTerminal(context);
             const toolConfig = getToolConfiguration();
-            mcpServer = new MCPServer(port, terminal, toolConfig);
+            mcpServer = new MCPServer(port, host, terminal, toolConfig);
             mcpServer.setFileListingCallback(async (path: string, recursive: boolean) => {
                 try {
                     return await listWorkspaceFiles(path, recursive);
@@ -155,6 +156,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const config = vscode.workspace.getConfiguration('vscode-mcp-server');
         const defaultEnabled = config.get<boolean>('defaultEnabled') ?? false;
         const port = config.get<number>('port') || 3000;
+        const host = config.get<string>('host') || '127.0.0.1';
 
         // Load saved state or use configured default
         serverEnabled = context.globalState.get('mcpServerEnabled', defaultEnabled);
@@ -176,7 +178,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Initialize MCP server with the configured port, terminal, and tool configuration
             const toolConfig = getToolConfiguration();
-            mcpServer = new MCPServer(port, terminal, toolConfig);
+            mcpServer = new MCPServer(port, host, terminal, toolConfig);
 
             // Set up file listing callback
             mcpServer.setFileListingCallback(async (path: string, recursive: boolean) => {
@@ -229,10 +231,11 @@ export async function activate(context: vscode.ExtensionContext) {
                     // Start new server with updated configuration
                     const config = vscode.workspace.getConfiguration('vscode-mcp-server');
                     const port = config.get<number>('port') || 3000;
+                    const host = config.get<string>('host') || '127.0.0.1';
                     const terminal = getExtensionTerminal(context);
                     const toolConfig = getToolConfiguration();
                     
-                    mcpServer = new MCPServer(port, terminal, toolConfig);
+                    mcpServer = new MCPServer(port, host, terminal, toolConfig);
                     mcpServer.setFileListingCallback(async (path: string, recursive: boolean) => {
                         try {
                             return await listWorkspaceFiles(path, recursive);
