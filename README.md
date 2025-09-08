@@ -213,6 +213,7 @@ Currently, only one workspace is supported. The extension also only works locall
 ## Extension Settings
 
 * `vscode-mcp-server.port`: The port number for the MCP server (default: 3000)
+* `vscode-mcp-server.host`: Host address for the MCP server (default: 127.0.0.1)
 * `vscode-mcp-server.defaultEnabled`: Whether the MCP server should be enabled by default on VS Code startup
 * `vscode-mcp-server.enabledTools`: Configure which tool categories are enabled (file, edit, shell, diagnostics, symbol)
 
@@ -223,6 +224,11 @@ Currently, only one workspace is supported. The extension also only works locall
 To connect MCP clients to this server, configure them to use:
 ```
 http://localhost:3000/mcp
+```
+
+Or if you've configured a custom host:
+```
+http://[your-host]:3000/mcp
 ```
 
 Remember that you need to enable the server first by clicking on the status bar item!
