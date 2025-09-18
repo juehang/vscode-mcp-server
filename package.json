@@ -3,7 +3,7 @@
   "icon": "media/logo.png",
   "displayName": "vscode-mcp-server",
   "description": "VS Code as a MCP server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "repository": "https://github.com/juehang/vscode-mcp-server",
   "publisher": "JuehangQin",
   "license": "MIT",

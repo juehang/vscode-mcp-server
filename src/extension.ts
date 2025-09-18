@@ -149,7 +149,6 @@ async function toggleServerState(context: vscode.ExtensionContext): Promise<void
 
 export async function activate(context: vscode.ExtensionContext) {
     logger.info('Activating vscode-mcp-server extension');
-    logger.showChannel(); // Show the output channel for easy access to logs
 
     try {
         // Get configuration
