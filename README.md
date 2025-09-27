@@ -88,6 +88,9 @@ The VS Code MCP Server extension implements an MCP-compliant server that allows 
 
 - **List files and directories** in your VS Code workspace
 - **Read file contents** with encoding support and size limits
+- **Move files and directories** with proper refactoring support for imports
+- **Rename files and directories** with automatic reference updates
+- **Copy files and directories** to new locations
 - **Search for symbols** across your workspace
 - **Get symbol definitions** and hover information by line and symbol name
 - **Create new files** using VS Code's WorkspaceEdit API
@@ -120,6 +123,24 @@ The extension creates an MCP server that:
     - `path`: The path to the file to read
     - `encoding` (optional): File encoding (default: utf-8)
     - `maxCharacters` (optional): Maximum character count (default: 100,000)
+
+- **move_file_code**: Moves a file or directory to a new location using VS Code's WorkspaceEdit API
+  - Parameters:
+    - `sourcePath`: The current path of the file or directory to move
+    - `targetPath`: The new path where the file or directory should be moved to
+    - `overwrite` (optional): Whether to overwrite if target already exists (default: false)
+
+- **rename_file_code**: Renames a file or directory using VS Code's WorkspaceEdit API
+  - Parameters:
+    - `filePath`: The current path of the file or directory to rename
+    - `newName`: The new name for the file or directory
+    - `overwrite` (optional): Whether to overwrite if a file with the new name already exists (default: false)
+
+- **copy_file_code**: Copies a file to a new location using VS Code's file system API
+  - Parameters:
+    - `sourcePath`: The path of the file to copy
+    - `targetPath`: The path where the copy should be created
+    - `overwrite` (optional): Whether to overwrite if target already exists (default: false)
 
 ### Edit Tools
 - **create_file_code**: Creates a new file using VS Code's WorkspaceEdit API

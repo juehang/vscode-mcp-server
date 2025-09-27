@@ -250,4 +250,188 @@ export function registerFileTools(
             }
         }
     );
+
+    // Add move_file tool
+    server.tool(
+        'move_file_code',
+        `Moves a file or directory to a new location using VS Code's WorkspaceEdit API.
+
+        WHEN TO USE: Reorganizing project structure, moving files between directories.
+
+        This operation uses VS Code's refactoring capabilities to ensure imports and references are updated correctly.
+
+        IMPORTANT: This will update all references to the moved file in the workspace.`,
+        {
+            sourcePath: z.string().describe('The current path of the file or directory to move'),
+            targetPath: z.string().describe('The new path where the file or directory should be moved to'),
+            overwrite: z.boolean().optional().default(false).describe('Whether to overwrite if target already exists')
+        },
+        async ({ sourcePath, targetPath, overwrite = false }): Promise<CallToolResult> => {
+            console.log(`[move_file] Tool called with sourcePath=${sourcePath}, targetPath=${targetPath}, overwrite=${overwrite}`);
+
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder is open');
+            }
+
+            const workspaceFolder = vscode.workspace.workspaceFolders[0];
+            const workspaceUri = workspaceFolder.uri;
+
+            const sourceUri = vscode.Uri.joinPath(workspaceUri, sourcePath);
+            const targetUri = vscode.Uri.joinPath(workspaceUri, targetPath);
+
+            try {
+                console.log(`[move_file] Moving from ${sourceUri.fsPath} to ${targetUri.fsPath}`);
+
+                // Use WorkspaceEdit for proper refactoring support
+                const edit = new vscode.WorkspaceEdit();
+                edit.renameFile(sourceUri, targetUri, { overwrite });
+
+                const success = await vscode.workspace.applyEdit(edit);
+
+                if (!success) {
+                    throw new Error('Failed to apply file move operation');
+                }
+
+                console.log('[move_file] File move completed successfully');
+
+                const result: CallToolResult = {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Successfully moved ${sourcePath} to ${targetPath}`
+                        }
+                    ]
+                };
+                return result;
+            } catch (error) {
+                console.error('[move_file] Error in tool:', error);
+                throw error;
+            }
+        }
+    );
+
+    // Add rename_file tool
+    server.tool(
+        'rename_file_code',
+        `Renames a file or directory using VS Code's WorkspaceEdit API.
+
+        WHEN TO USE: Renaming files to follow naming conventions, refactoring code.
+
+        This operation uses VS Code's refactoring capabilities to ensure imports and references are updated correctly.
+
+        IMPORTANT: This will update all references to the renamed file in the workspace.`,
+        {
+            filePath: z.string().describe('The current path of the file or directory to rename'),
+            newName: z.string().describe('The new name for the file or directory'),
+            overwrite: z.boolean().optional().default(false).describe('Whether to overwrite if a file with the new name already exists')
+        },
+        async ({ filePath, newName, overwrite = false }): Promise<CallToolResult> => {
+            console.log(`[rename_file] Tool called with filePath=${filePath}, newName=${newName}, overwrite=${overwrite}`);
+
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder is open');
+            }
+
+            const workspaceFolder = vscode.workspace.workspaceFolders[0];
+            const workspaceUri = workspaceFolder.uri;
+
+            const fileUri = vscode.Uri.joinPath(workspaceUri, filePath);
+            const directoryPath = path.dirname(filePath);
+            const newFilePath = path.join(directoryPath, newName);
+            const newFileUri = vscode.Uri.joinPath(workspaceUri, newFilePath);
+
+            try {
+                console.log(`[rename_file] Renaming ${fileUri.fsPath} to ${newFileUri.fsPath}`);
+
+                // Use WorkspaceEdit for proper refactoring support
+                const edit = new vscode.WorkspaceEdit();
+                edit.renameFile(fileUri, newFileUri, { overwrite });
+
+                const success = await vscode.workspace.applyEdit(edit);
+
+                if (!success) {
+                    throw new Error('Failed to apply file rename operation');
+                }
+
+                console.log('[rename_file] File rename completed successfully');
+
+                const result: CallToolResult = {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Successfully renamed ${filePath} to ${newName}`
+                        }
+                    ]
+                };
+                return result;
+            } catch (error) {
+                console.error('[rename_file] Error in tool:', error);
+                throw error;
+            }
+        }
+    );
+
+    // Add copy_file tool
+    server.tool(
+        'copy_file_code',
+        `Copies a file or directory to a new location using VS Code's WorkspaceEdit API.
+
+        WHEN TO USE: Creating backups, duplicating files for testing, creating template files.
+
+        This operation creates a copy of the file without affecting the original.`,
+        {
+            sourcePath: z.string().describe('The path of the file or directory to copy'),
+            targetPath: z.string().describe('The path where the copy should be created'),
+            overwrite: z.boolean().optional().default(false).describe('Whether to overwrite if target already exists')
+        },
+        async ({ sourcePath, targetPath, overwrite = false }): Promise<CallToolResult> => {
+            console.log(`[copy_file] Tool called with sourcePath=${sourcePath}, targetPath=${targetPath}, overwrite=${overwrite}`);
+
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder is open');
+            }
+
+            const workspaceFolder = vscode.workspace.workspaceFolders[0];
+            const workspaceUri = workspaceFolder.uri;
+
+            const sourceUri = vscode.Uri.joinPath(workspaceUri, sourcePath);
+            const targetUri = vscode.Uri.joinPath(workspaceUri, targetPath);
+
+            try {
+                console.log(`[copy_file] Copying from ${sourceUri.fsPath} to ${targetUri.fsPath}`);
+
+                // Check if target already exists
+                try {
+                    await vscode.workspace.fs.stat(targetUri);
+                    // Target exists
+                    if (!overwrite) {
+                        throw new Error(`Target file ${targetPath} already exists. Use overwrite=true to overwrite.`);
+                    }
+                } catch (error) {
+                    // Target doesn't exist, which is fine
+                }
+
+                // Read the source file
+                const fileContent = await vscode.workspace.fs.readFile(sourceUri);
+
+                // Write to target file
+                await vscode.workspace.fs.writeFile(targetUri, fileContent);
+
+                console.log('[copy_file] File copy completed successfully');
+
+                const result: CallToolResult = {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Successfully copied ${sourcePath} to ${targetPath}`
+                        }
+                    ]
+                };
+                return result;
+            } catch (error) {
+                console.error('[copy_file] Error in tool:', error);
+                throw error;
+            }
+        }
+    );
 }
