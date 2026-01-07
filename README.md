@@ -1,4 +1,5 @@
 # VS Code MCP Server
+[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/juehang/vscode-mcp-server)](https://archestra.ai/mcp-catalog/juehang__vscode-mcp-server)
 
 A Visual Studio Code extension (available on the [Marketplace](https://marketplace.visualstudio.com/items?itemName=JuehangQin.vscode-mcp-server)) that allows Claude and other MCP clients to code directly in VS Code! Inspired by [Serena](https://github.com/oraios/serena), but using VS Code's built-in capabilities. Perfect for extending existing coding agents like Claude Code with VS Code-specific capabilities (symbol search, document outlines) without duplicating tools they already have. Note that this extension uses the streamable HTTP API, not the SSE API.
 
