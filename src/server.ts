@@ -9,6 +9,7 @@ import { registerEditTools } from './tools/edit-tools';
 import { registerShellTools } from './tools/shell-tools';
 import { registerDiagnosticsTools } from './tools/diagnostics-tools';
 import { registerSymbolTools } from './tools/symbol-tools';
+import { wrapToolHandler } from './utils/tool-logging';
 import { logger } from './utils/logger';
 
 export interface ToolConfiguration {
@@ -17,6 +18,7 @@ export interface ToolConfiguration {
     shell: boolean;
     diagnostics: boolean;
     symbol: boolean;
+    logToolCalls: boolean;
 }
 
 export class MCPServer {
@@ -43,7 +45,8 @@ export class MCPServer {
             edit: true,
             shell: true,
             diagnostics: true,
-            symbol: true
+            symbol: true,
+            logToolCalls: false
         };
         this.app = express();
         this.app.use(express.json());
@@ -61,6 +64,9 @@ export class MCPServer {
             }
         });
 
+        // Apply tool logging proxy early so registered tools are wrapped when enabled
+        this.applyToolLoggingProxy();
+
         // Initialize transport
         this.transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
@@ -71,6 +77,18 @@ export class MCPServer {
         this.setupEventHandlers();
     }
     
+    private applyToolLoggingProxy(): void {
+        if (!this.toolConfig.logToolCalls) {
+            return;
+        }
+
+        const originalTool = this.server.tool as any;
+        const boundServer = this.server;
+        (this.server as any).tool = function (toolName: string, description: string, schema: any, handler: any, ...rest: any[]): any {
+            return originalTool.apply(boundServer, [toolName, description, schema, wrapToolHandler(toolName, handler, true), ...rest]);
+        };
+    }
+
     public setupTools(): void {
         // Register tools from the tools module based on configuration
         if (this.fileListingCallback) {

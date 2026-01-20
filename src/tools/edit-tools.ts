@@ -104,22 +104,18 @@ export async function replaceWorkspaceFileLines(
             throw new Error(`End line ${endLine + 1} is out of range (${startLine + 1}-${document.lineCount})`);
         }
         
-        // Get the current content of the lines
-        const currentLines = [];
-        for (let i = startLine; i <= endLine; i++) {
-            currentLines.push(document.lineAt(i).text);
-        }
-        const currentContent = currentLines.join('\n');
+        // Create a range for the lines to replace
+        const startPos = new vscode.Position(startLine, 0);
+        const endPos = new vscode.Position(endLine, document.lineAt(endLine).text.length);
+        const range = new vscode.Range(startPos, endPos);
+        
+        // Get the current content of the range
+        const currentContent = document.getText(range);
         
         // Compare with the provided original code
         if (currentContent !== originalCode) {
             throw new Error(`Original code validation failed. The current content does not match the provided original code.`);
         }
-        
-        // Create a range for the lines to replace
-        const startPos = new vscode.Position(startLine, 0);
-        const endPos = new vscode.Position(endLine, document.lineAt(endLine).text.length);
-        const range = new vscode.Range(startPos, endPos);
         
         // Get the active text editor or show the document
         let editor = vscode.window.activeTextEditor;

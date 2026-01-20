@@ -22,13 +22,15 @@ const TERMINAL_NAME = 'MCP Shell Commands';
 function getToolConfiguration(): ToolConfiguration {
     const config = vscode.workspace.getConfiguration('vscode-mcp-server');
     const enabledTools = config.get<any>('enabledTools') || {};
+    const logToolCalls = config.get<boolean>('logToolCalls') ?? false;
     
     return {
         file: enabledTools.file ?? true,
         edit: enabledTools.edit ?? true,
         shell: enabledTools.shell ?? true,
         diagnostics: enabledTools.diagnostics ?? true,
-        symbol: enabledTools.symbol ?? true
+        symbol: enabledTools.symbol ?? true,
+        logToolCalls
     };
 }
 

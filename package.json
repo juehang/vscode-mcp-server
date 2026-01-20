@@ -38,6 +38,11 @@
           "default": false,
           "description": "Whether the MCP server should be enabled by default on VS Code startup"
         },
+        "vscode-mcp-server.logToolCalls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log each MCP tool call (inputs only) to the MCP Server output channel for debugging"
+        },
         "vscode-mcp-server.enabledTools": {
           "type": "object",
           "default": {

@@ -6,6 +6,16 @@ This extension can allow for execution of shell commands. This means that there 
 
 PRs are welcome!
 
+## Why you might install this MCP server
+
+- **Code agents that don’t run VS Code or IntelliJ.** Claude or any other client can talk to this extension instead of embedding the IDE itself, so the coding agent can live inside a chat app or automation pipeline while still accessing the workspace via MCP tools.
+- **Headless workflows and CI-friendly diagnostics.** Trigger `get_diagnostics_code`, file edits, or `search_symbols_code` from scripts or bots that do not host a UI; the MCP server simply acts as an HTTP bridge into VS Code’s workspace.
+- **Fill the gaps between IDE platforms.** Use this extension when you need VS Code-specific tools (symbol search, glob helpers, tree views) but your agent is already configured to work with IntelliJ’s MCP server; the new guide explains how both can coexist and when to switch between them (`docs/intellij-vscode-mcp.md`).
+
+### Debug logging for tool calls
+
+Enable the `vscode-mcp-server.logToolCalls` setting to emit every MCP tool invocation (name + args) into the **MCP Server Extension** output channel. Open **Settings** (Ctrl+, or ⌘+,), search for "MCP Server log tool calls", toggle it on, and then click the status bar item (or run the "Toggle MCP Server" command) to restart the server so the new flag takes effect. Cursor's settings UI uses the same configuration keys, so the same toggle appears there when you open Settings or use the `Ctrl+,` shortcut and search for the setting. Once enabled, open **View → Output**, select "MCP Server Extension", and you’ll see the inbound tool calls for debugging.
+
 ## Demo Video
 https://github.com/user-attachments/assets/20b87dfb-fc39-4710-a910-b9481dde1e90
 
@@ -91,6 +101,9 @@ The VS Code MCP Server extension implements an MCP-compliant server that allows 
 - **Move files and directories** with proper refactoring support for imports
 - **Rename files and directories** with automatic reference updates
 - **Copy files** to new locations (files only, not directories)
+- **Search files with glob patterns** to match extensions or directories quickly (find_files_by_glob)
+- **Find files by name keyword** for fast name-based lookup (find_files_by_name_keyword)
+- **Render directory trees** to see the workspace hierarchy before digging in (list_directory_tree)
 - **Search for symbols** across your workspace
 - **Get symbol definitions** and hover information by line and symbol name
 - **Create new files** using VS Code's WorkspaceEdit API
@@ -141,6 +154,22 @@ The extension creates an MCP server that:
     - `sourcePath`: The path of the file to copy
     - `targetPath`: The path where the copy should be created
     - `overwrite` (optional): Whether to overwrite if target already exists (default: false)
+
+- **find_files_by_glob**: Finds files matching a glob pattern, optionally skipping other paths
+  - Parameters:
+    - `pattern`: Glob pattern relative to the workspace (e.g., `**/*.ts`)
+    - `exclude` (optional): Glob pattern for paths to ignore (e.g., `**/node_modules/**`)
+    - `maxResults` (optional): Upper limit of matches to return (default: 100)
+
+- **find_files_by_name_keyword**: Searches indexed file/directory names for a keyword
+  - Parameters:
+    - `keyword`: Keyword to match in names
+    - `maxResults` (optional): Upper limit of matches to return (default: 100)
+
+- **list_directory_tree**: Renders an ASCII-style directory tree from the starting path
+  - Parameters:
+    - `path` (optional): Workspace path to render (default: `.`)
+    - `maxDepth` (optional): Maximum depth to traverse (default: 3, max 8)
 
 ### Edit Tools
 - **create_file_code**: Creates a new file using VS Code's WorkspaceEdit API
@@ -253,6 +282,10 @@ http://[your-host]:3000/mcp
 ```
 
 Remember that you need to enable the server first by clicking on the status bar item!
+
+## Guides
+
+- **IntelliJ ↔ VS Code MCP workflows**: `docs/intellij-vscode-mcp.md` explains why you might connect to JetBrains’ built-in MCP server, how the Auto-Configure workflow works, where manual JSON edits go, and what VS Code can do when it acts as an MCP server itself.
 
 ## Contributing
 
