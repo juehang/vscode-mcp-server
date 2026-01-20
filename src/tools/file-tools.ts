@@ -443,4 +443,227 @@ export function registerFileTools(
             }
         }
     );
+
+    // Add find_files_by_glob tool
+    server.tool(
+        'find_files_by_glob',
+        `Searches the workspace for files that match a glob pattern.
+
+        WHEN TO USE: Locate files by extension or folder structure (e.g., **/*.java).
+        
+        NOTE: Prefer narrow patterns and use exclude filters to keep result sets manageable.`,
+        {
+            pattern: z.string().describe('Glob pattern that matches files relative to the workspace (e.g., **/*.ts)'),
+            exclude: z.string().optional().describe('Optional glob pattern to skip (e.g., **/node_modules/**)'),
+            maxResults: z
+                .number()
+                .optional()
+                .default(100)
+                .describe('Maximum number of matches to return (1-1000)')
+        },
+        async ({ pattern, exclude, maxResults = 100 }): Promise<CallToolResult> => {
+            console.log(`[find_files_by_glob] pattern=${pattern}, exclude=${exclude}, maxResults=${maxResults}`);
+            const normalizedLimit = clamp(maxResults, 1, MAX_SEARCH_RESULTS);
+            const matches = await searchWorkspaceFilesByGlob(pattern, exclude, normalizedLimit);
+            const resultText = formatSearchResults('Glob search results', matches);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: resultText
+                    }
+                ]
+            };
+        }
+    );
+
+    // Add find_files_by_name_keyword tool
+    server.tool(
+        'find_files_by_name_keyword',
+        `Performs a fast name-based lookup using the workspace index.
+
+        WHEN TO USE: Scan by partial file or folder names without reading entire directories.`,
+        {
+            keyword: z.string().describe('Keyword to match within file and directory names'),
+            maxResults: z
+                .number()
+                .optional()
+                .default(100)
+                .describe('Maximum number of results to return (1-1000)')
+        },
+        async ({ keyword, maxResults = 100 }): Promise<CallToolResult> => {
+            console.log(`[find_files_by_name_keyword] keyword=${keyword}, maxResults=${maxResults}`);
+            const normalizedLimit = clamp(maxResults, 1, MAX_SEARCH_RESULTS);
+            const matches = await searchWorkspaceFilesByNameKeyword(keyword, normalizedLimit);
+            const resultText = formatSearchResults(`Keyword search for "${keyword}"`, matches);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: resultText
+                    }
+                ]
+            };
+        }
+    );
+
+    // Add list_directory_tree tool
+    server.tool(
+        'list_directory_tree',
+        `Renders a directory tree starting at the provided path.
+
+        WHEN TO USE: Get a hierarchical overview of folders before exploring individual files.
+        
+        TIP: Combine with list_files_code for deeper inspection.`,
+        {
+            path: z.string().optional().default('.').describe('Workspace path to render (default: root)'),
+            maxDepth: z
+                .number()
+                .optional()
+                .default(DEFAULT_TREE_DEPTH)
+                .describe('Maximum depth of the tree (1-8)')
+        },
+        async ({ path: treePath = '.', maxDepth = DEFAULT_TREE_DEPTH }): Promise<CallToolResult> => {
+            console.log(`[list_directory_tree] path=${treePath}, maxDepth=${maxDepth}`);
+            const normalizedDepth = clamp(maxDepth, 1, MAX_TREE_DEPTH);
+            const treeOutput = await buildDirectoryTree(treePath, normalizedDepth);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: treeOutput
+                    }
+                ]
+            };
+        }
+    );
+
+}
+
+const MAX_SEARCH_RESULTS = 1000;
+const DEFAULT_TREE_DEPTH = 3;
+const MAX_TREE_DEPTH = 8;
+
+function clamp(value: number, minValue: number, maxValue: number): number {
+    return Math.max(minValue, Math.min(maxValue, value));
+}
+
+function getWorkspaceFolderOrThrow(): vscode.WorkspaceFolder {
+    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+        throw new Error('No workspace folder is open');
+    }
+
+    return vscode.workspace.workspaceFolders[0];
+}
+
+function getWorkspaceRelativePath(targetUri: vscode.Uri): string {
+    const folder = getWorkspaceFolderOrThrow();
+    const relativePath = path.relative(folder.uri.fsPath, targetUri.fsPath);
+    return relativePath || '.';
+}
+
+function formatSearchResults(title: string, matches: string[]): string {
+    if (matches.length === 0) {
+        return `${title} returned no matches.`;
+    }
+
+    const lines = [`${title} (${matches.length} file${matches.length === 1 ? '' : 's'}):`];
+    matches.forEach((match, index) => lines.push(`${index + 1}. ${match}`));
+    return lines.join('\n');
+}
+
+async function searchWorkspaceFilesByGlob(pattern: string, exclude: string | undefined, maxResults: number): Promise<string[]> {
+    if (!pattern.trim()) {
+        throw new Error('Glob pattern cannot be empty');
+    }
+
+    const uris = await vscode.workspace.findFiles(pattern, exclude, maxResults);
+    return uris.map(getWorkspaceRelativePath);
+}
+
+async function searchWorkspaceFilesByNameKeyword(keyword: string, maxResults: number): Promise<string[]> {
+    const trimmedKeyword = keyword.trim();
+
+    if (!trimmedKeyword) {
+        throw new Error('Keyword cannot be empty');
+    }
+
+    const folder = getWorkspaceFolderOrThrow();
+    const escapedKeyword = escapeGlobCharacters(trimmedKeyword);
+    const pattern = `**/*${escapedKeyword}*`;
+    const relativePattern = new vscode.RelativePattern(folder, pattern);
+    const uris = await vscode.workspace.findFiles(relativePattern, undefined, maxResults);
+    return uris.map(getWorkspaceRelativePath);
+}
+
+function escapeGlobCharacters(value: string): string {
+    return value.replace(/([*?\[\]{}()!+^])/g, "\$1");
+}
+
+async function buildDirectoryTree(treePath: string, maxDepth: number): Promise<string> {
+    const folder = getWorkspaceFolderOrThrow();
+    const normalizedPath = treePath.trim() ? treePath : '.';
+    const rootUri = vscode.Uri.joinPath(folder.uri, normalizedPath);
+
+    let rootStat;
+    try {
+        rootStat = await vscode.workspace.fs.stat(rootUri);
+    } catch (error) {
+        throw new Error(`Unable to access ${normalizedPath}: ${(error as Error).message}`);
+    }
+
+    const lines = [normalizedPath === '.' ? '.' : normalizedPath];
+
+    if (!(rootStat.type & vscode.FileType.Directory)) {
+        return lines.join('\n');
+    }
+
+    await traverseDirectory(rootUri, 1, '', lines, maxDepth);
+    return lines.join('\n');
+}
+
+async function traverseDirectory(
+    dirUri: vscode.Uri,
+    depth: number,
+    prefix: string,
+    lines: string[],
+    maxDepth: number
+): Promise<void> {
+    if (depth > maxDepth) {
+        return;
+    }
+
+    let entries: [string, vscode.FileType][];
+
+    try {
+        entries = await vscode.workspace.fs.readDirectory(dirUri);
+    } catch (error) {
+        console.error(`[traverseDirectory] Failed to read ${dirUri.fsPath}:`, error);
+        return;
+    }
+
+    const sortedEntries = entries.sort(([nameA, typeA], [nameB, typeB]) => {
+        const isDirA = Boolean(typeA & vscode.FileType.Directory);
+        const isDirB = Boolean(typeB & vscode.FileType.Directory);
+
+        if (isDirA !== isDirB) {
+            return isDirA ? -1 : 1;
+        }
+
+        return nameA.localeCompare(nameB);
+    });
+
+    for (let index = 0; index < sortedEntries.length; index++) {
+        const [name, type] = sortedEntries[index];
+        const isLast = index === sortedEntries.length - 1;
+        const connector = isLast ? '└── ' : '├── ';
+        const displayName = type & vscode.FileType.Directory ? `${name}/` : name;
+        lines.push(`${prefix}${connector}${displayName}`);
+
+        if ((type & vscode.FileType.Directory) && depth < maxDepth) {
+            const childPrefix = prefix + (isLast ? '    ' : '│   ');
+            const childUri = vscode.Uri.joinPath(dirUri, name);
+            await traverseDirectory(childUri, depth + 1, childPrefix, lines, maxDepth);
+        }
+    }
 }
