@@ -4,28 +4,8 @@ import { z } from 'zod';
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as path from 'path';
 import * as fs from 'fs';
-import { logger } from '../utils/logger';
-
-/**
- * Resolves a path to a VS Code URI.
- * If the path is absolute, uses it directly.
- * If relative, joins it with the first workspace folder.
- * @param inputPath The path to resolve
- * @returns The resolved URI
- */
-function resolvePathToUri(inputPath: string): vscode.Uri {
-    // Check if path is absolute (Unix or Windows)
-    if (path.isAbsolute(inputPath)) {
-        return vscode.Uri.file(inputPath);
-    }
-
-    // Relative path - join with workspace
-    if (!vscode.workspace.workspaceFolders) {
-        throw new Error('No workspace folder is open');
-    }
-    const workspaceFolder = vscode.workspace.workspaceFolders[0];
-    return vscode.Uri.joinPath(workspaceFolder.uri, inputPath);
-}
+import { logger } from '../utils/logger.js';
+import { resolvePathToUri } from '../utils/path-utils.js';
 
 /**
  * Convert a symbol kind to a string representation
