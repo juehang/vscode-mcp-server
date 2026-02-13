@@ -7,6 +7,27 @@ import * as fs from 'fs';
 import { logger } from '../utils/logger';
 
 /**
+ * Resolves a path to a VS Code URI.
+ * If the path is absolute, uses it directly.
+ * If relative, joins it with the first workspace folder.
+ * @param inputPath The path to resolve
+ * @returns The resolved URI
+ */
+function resolvePathToUri(inputPath: string): vscode.Uri {
+    // Check if path is absolute (Unix or Windows)
+    if (path.isAbsolute(inputPath)) {
+        return vscode.Uri.file(inputPath);
+    }
+
+    // Relative path - join with workspace
+    if (!vscode.workspace.workspaceFolders) {
+        throw new Error('No workspace folder is open');
+    }
+    const workspaceFolder = vscode.workspace.workspaceFolders[0];
+    return vscode.Uri.joinPath(workspaceFolder.uri, inputPath);
+}
+
+/**
  * Convert a symbol kind to a string representation
  * @param kind The symbol kind enum value
  * @returns String representation of the symbol kind
@@ -476,13 +497,8 @@ export function registerSymbolTools(server: McpServer): void {
             // Convert 1-based input to 0-based for VS Code API
             const zeroBasedLine = line - 1;
             try {
-                if (!vscode.workspace.workspaceFolders) {
-                    throw new Error('No workspace folder open');
-                }
-                
-                const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-                const fullPath = require('path').resolve(workspaceRoot, path);
-                const uri = vscode.Uri.file(fullPath);
+                // Resolve path (handles both absolute and relative paths)
+                const uri = resolvePathToUri(path);
                 
                 // Check if file exists
                 try {
@@ -575,21 +591,16 @@ export function registerSymbolTools(server: McpServer): void {
             logger.info(`[get_document_symbols_code] Tool called with path="${path}", maxDepth=${maxDepth}`);
             
             try {
-                if (!vscode.workspace.workspaceFolders) {
-                    throw new Error('No workspace folder open');
-                }
-                
-                const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-                const fullPath = require('path').resolve(workspaceRoot, path);
-                const uri = vscode.Uri.file(fullPath);
-                
+                // Resolve path (handles both absolute and relative paths)
+                const uri = resolvePathToUri(path);
+
                 // Check if file exists
                 try {
                     await vscode.workspace.fs.stat(uri);
                 } catch (error) {
                     throw new Error(`File not found: ${path}`);
                 }
-                
+
                 logger.info('[get_document_symbols_code] Getting document symbols');
                 const result = await getDocumentSymbols(uri, maxDepth);
                 

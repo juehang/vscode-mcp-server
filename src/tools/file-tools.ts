@@ -4,6 +4,27 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from 'zod';
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+/**
+ * Resolves a path to a VS Code URI.
+ * If the path is absolute, uses it directly.
+ * If relative, joins it with the first workspace folder.
+ * @param inputPath The path to resolve
+ * @returns The resolved URI
+ */
+function resolvePathToUri(inputPath: string): vscode.Uri {
+    // Check if path is absolute (Unix or Windows)
+    if (path.isAbsolute(inputPath)) {
+        return vscode.Uri.file(inputPath);
+    }
+
+    // Relative path - join with workspace
+    if (!vscode.workspace.workspaceFolders) {
+        throw new Error('No workspace folder is open');
+    }
+    const workspaceFolder = vscode.workspace.workspaceFolders[0];
+    return vscode.Uri.joinPath(workspaceFolder.uri, inputPath);
+}
+
 // Type for file listing results
 export type FileListingResult = Array<{path: string, type: 'file' | 'directory'}>;
 
@@ -21,16 +42,9 @@ const DEFAULT_MAX_CHARACTERS = 100000;
  */
 export async function listWorkspaceFiles(workspacePath: string, recursive: boolean = false): Promise<FileListingResult> {
     console.log(`[listWorkspaceFiles] Starting with path: ${workspacePath}, recursive: ${recursive}`);
-    
-    if (!vscode.workspace.workspaceFolders) {
-        throw new Error('No workspace folder is open');
-    }
 
-    const workspaceFolder = vscode.workspace.workspaceFolders[0];
-    const workspaceUri = workspaceFolder.uri;
-    
-    // Create URI for the target directory
-    const targetUri = vscode.Uri.joinPath(workspaceUri, workspacePath);
+    // Resolve path (handles both absolute and relative paths)
+    const targetUri = resolvePathToUri(workspacePath);
     console.log(`[listWorkspaceFiles] Target URI: ${targetUri.fsPath}`);
 
     async function processDirectory(dirUri: vscode.Uri, currentPath: string = ''): Promise<FileListingResult> {
@@ -73,23 +87,16 @@ export async function listWorkspaceFiles(workspacePath: string, recursive: boole
  * @returns File content as string (either text-encoded or base64)
  */
 export async function readWorkspaceFile(
-    workspacePath: string, 
-    encoding: string = 'utf-8', 
+    workspacePath: string,
+    encoding: string = 'utf-8',
     maxCharacters: number = DEFAULT_MAX_CHARACTERS,
     startLine: number = -1,
     endLine: number = -1
 ): Promise<string> {
     console.log(`[readWorkspaceFile] Starting with path: ${workspacePath}, encoding: ${encoding}, maxCharacters: ${maxCharacters}, startLine: ${startLine}, endLine: ${endLine}`);
-    
-    if (!vscode.workspace.workspaceFolders) {
-        throw new Error('No workspace folder is open');
-    }
 
-    const workspaceFolder = vscode.workspace.workspaceFolders[0];
-    const workspaceUri = workspaceFolder.uri;
-    
-    // Create URI for the target file
-    const fileUri = vscode.Uri.joinPath(workspaceUri, workspacePath);
+    // Resolve path (handles both absolute and relative paths)
+    const fileUri = resolvePathToUri(workspacePath);
     console.log(`[readWorkspaceFile] File URI: ${fileUri.fsPath}`);
 
     try {
@@ -269,15 +276,9 @@ export function registerFileTools(
         async ({ sourcePath, targetPath, overwrite = false }): Promise<CallToolResult> => {
             console.log(`[move_file] Tool called with sourcePath=${sourcePath}, targetPath=${targetPath}, overwrite=${overwrite}`);
 
-            if (!vscode.workspace.workspaceFolders) {
-                throw new Error('No workspace folder is open');
-            }
-
-            const workspaceFolder = vscode.workspace.workspaceFolders[0];
-            const workspaceUri = workspaceFolder.uri;
-
-            const sourceUri = vscode.Uri.joinPath(workspaceUri, sourcePath);
-            const targetUri = vscode.Uri.joinPath(workspaceUri, targetPath);
+            // Resolve paths (handles both absolute and relative paths)
+            const sourceUri = resolvePathToUri(sourcePath);
+            const targetUri = resolvePathToUri(targetPath);
 
             try {
                 console.log(`[move_file] Moving from ${sourceUri.fsPath} to ${targetUri.fsPath}`);
@@ -290,6 +291,19 @@ export function registerFileTools(
 
                 if (!success) {
                     throw new Error('Failed to apply file move operation; check if target and source are valid');
+                }
+
+                // Trigger TypeScript/JavaScript import updates
+                // The _typescript.applyRenameFile command updates all import references
+                try {
+                    await vscode.commands.executeCommand('_typescript.applyRenameFile', {
+                        sourceUri: sourceUri.toString(),
+                        targetUri: targetUri.toString()
+                    });
+                    console.log('[move_file] TypeScript import updates applied');
+                } catch (tsError) {
+                    // TypeScript extension may not be active (non-TS/JS files), that's OK
+                    console.log('[move_file] TypeScript import update skipped:', tsError);
                 }
 
                 console.log('[move_file] File move completed successfully');
@@ -328,17 +342,12 @@ export function registerFileTools(
         async ({ filePath, newName, overwrite = false }): Promise<CallToolResult> => {
             console.log(`[rename_file] Tool called with filePath=${filePath}, newName=${newName}, overwrite=${overwrite}`);
 
-            if (!vscode.workspace.workspaceFolders) {
-                throw new Error('No workspace folder is open');
-            }
-
-            const workspaceFolder = vscode.workspace.workspaceFolders[0];
-            const workspaceUri = workspaceFolder.uri;
-
-            const fileUri = vscode.Uri.joinPath(workspaceUri, filePath);
-            const directoryPath = path.dirname(filePath);
+            // Resolve the source path
+            const fileUri = resolvePathToUri(filePath);
+            // Build target path by replacing the filename
+            const directoryPath = path.dirname(fileUri.fsPath);
             const newFilePath = path.join(directoryPath, newName);
-            const newFileUri = vscode.Uri.joinPath(workspaceUri, newFilePath);
+            const newFileUri = vscode.Uri.file(newFilePath);
 
             try {
                 console.log(`[rename_file] Renaming ${fileUri.fsPath} to ${newFileUri.fsPath}`);
@@ -351,6 +360,18 @@ export function registerFileTools(
 
                 if (!success) {
                     throw new Error('Failed to apply file rename operation; check if target and source are valid');
+                }
+
+                // Trigger TypeScript/JavaScript import updates
+                try {
+                    await vscode.commands.executeCommand('_typescript.applyRenameFile', {
+                        sourceUri: fileUri.toString(),
+                        targetUri: newFileUri.toString()
+                    });
+                    console.log('[rename_file] TypeScript import updates applied');
+                } catch (tsError) {
+                    // TypeScript extension may not be active (non-TS/JS files), that's OK
+                    console.log('[rename_file] TypeScript import update skipped:', tsError);
                 }
 
                 console.log('[rename_file] File rename completed successfully');
@@ -387,15 +408,9 @@ export function registerFileTools(
         async ({ sourcePath, targetPath, overwrite = false }): Promise<CallToolResult> => {
             console.log(`[copy_file] Tool called with sourcePath=${sourcePath}, targetPath=${targetPath}, overwrite=${overwrite}`);
 
-            if (!vscode.workspace.workspaceFolders) {
-                throw new Error('No workspace folder is open');
-            }
-
-            const workspaceFolder = vscode.workspace.workspaceFolders[0];
-            const workspaceUri = workspaceFolder.uri;
-
-            const sourceUri = vscode.Uri.joinPath(workspaceUri, sourcePath);
-            const targetUri = vscode.Uri.joinPath(workspaceUri, targetPath);
+            // Resolve paths (handles both absolute and relative paths)
+            const sourceUri = resolvePathToUri(sourcePath);
+            const targetUri = resolvePathToUri(targetPath);
 
             try {
                 console.log(`[copy_file] Copying from ${sourceUri.fsPath} to ${targetUri.fsPath}`);

@@ -5,30 +5,44 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as path from 'path';
 
 /**
+ * Resolves a path to a VS Code URI.
+ * If the path is absolute, uses it directly.
+ * If relative, joins it with the first workspace folder.
+ * @param inputPath The path to resolve
+ * @returns The resolved URI
+ */
+function resolvePathToUri(inputPath: string): vscode.Uri {
+    // Check if path is absolute (Unix or Windows)
+    if (path.isAbsolute(inputPath)) {
+        return vscode.Uri.file(inputPath);
+    }
+
+    // Relative path - join with workspace
+    if (!vscode.workspace.workspaceFolders) {
+        throw new Error('No workspace folder is open');
+    }
+    const workspaceFolder = vscode.workspace.workspaceFolders[0];
+    return vscode.Uri.joinPath(workspaceFolder.uri, inputPath);
+}
+
+/**
  * Get diagnostics for the entire workspace or a specific file
  * @param filePath Optional file path to check
  * @returns Array of [Uri, Diagnostic[]] tuples
  */
 function getDiagnostics(filePath?: string): [vscode.Uri, vscode.Diagnostic[]][] {
     console.log(`[getDiagnostics] Starting with filePath: ${filePath || 'all files'}`);
-    
+
     // If filePath is provided, get diagnostics for that file only
     if (filePath) {
-        if (!vscode.workspace.workspaceFolders) {
-            throw new Error('No workspace folder is open');
-        }
-
-        const workspaceFolder = vscode.workspace.workspaceFolders[0];
-        const workspaceUri = workspaceFolder.uri;
-        
-        // Create URI for the target file
-        const fileUri = vscode.Uri.joinPath(workspaceUri, filePath);
+        // Resolve path (handles both absolute and relative paths)
+        const fileUri = resolvePathToUri(filePath);
         console.log(`[getDiagnostics] Getting diagnostics for file: ${fileUri.fsPath}`);
-        
+
         const diagnostics = vscode.languages.getDiagnostics(fileUri);
         return diagnostics.length > 0 ? [[fileUri, diagnostics]] : [];
     }
-    
+
     // Otherwise, get diagnostics for all files
     console.log('[getDiagnostics] Getting diagnostics for all files');
     return vscode.languages.getDiagnostics();

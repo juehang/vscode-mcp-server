@@ -1,7 +1,29 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from 'zod';
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+
+/**
+ * Resolves a path to a VS Code URI.
+ * If the path is absolute, uses it directly.
+ * If relative, joins it with the first workspace folder.
+ * @param inputPath The path to resolve
+ * @returns The resolved URI
+ */
+function resolvePathToUri(inputPath: string): vscode.Uri {
+    // Check if path is absolute (Unix or Windows)
+    if (path.isAbsolute(inputPath)) {
+        return vscode.Uri.file(inputPath);
+    }
+
+    // Relative path - join with workspace
+    if (!vscode.workspace.workspaceFolders) {
+        throw new Error('No workspace folder is open');
+    }
+    const workspaceFolder = vscode.workspace.workspaceFolders[0];
+    return vscode.Uri.joinPath(workspaceFolder.uri, inputPath);
+}
 
 /**
  * Creates a new file in the VS Code workspace using WorkspaceEdit
@@ -18,16 +40,9 @@ export async function createWorkspaceFile(
     ignoreIfExists: boolean = false
 ): Promise<void> {
     console.log(`[createWorkspaceFile] Starting with path: ${workspacePath}, overwrite: ${overwrite}, ignoreIfExists: ${ignoreIfExists}`);
-    
-    if (!vscode.workspace.workspaceFolders) {
-        throw new Error('No workspace folder is open');
-    }
 
-    const workspaceFolder = vscode.workspace.workspaceFolders[0];
-    const workspaceUri = workspaceFolder.uri;
-    
-    // Create URI for the target file
-    const fileUri = vscode.Uri.joinPath(workspaceUri, workspacePath);
+    // Resolve path (handles both absolute and relative paths)
+    const fileUri = resolvePathToUri(workspacePath);
     console.log(`[createWorkspaceFile] File URI: ${fileUri.fsPath}`);
 
     try {
@@ -80,16 +95,9 @@ export async function replaceWorkspaceFileLines(
     originalCode: string
 ): Promise<void> {
     console.log(`[replaceWorkspaceFileLines] Starting with path: ${workspacePath}, lines: ${startLine}-${endLine}`);
-    
-    if (!vscode.workspace.workspaceFolders) {
-        throw new Error('No workspace folder is open');
-    }
 
-    const workspaceFolder = vscode.workspace.workspaceFolders[0];
-    const workspaceUri = workspaceFolder.uri;
-    
-    // Create URI for the target file
-    const fileUri = vscode.Uri.joinPath(workspaceUri, workspacePath);
+    // Resolve path (handles both absolute and relative paths)
+    const fileUri = resolvePathToUri(workspacePath);
     console.log(`[replaceWorkspaceFileLines] File URI: ${fileUri.fsPath}`);
 
     try {
