@@ -9,6 +9,10 @@ PRs are welcome!
 ## Demo Video
 https://github.com/user-attachments/assets/20b87dfb-fc39-4710-a910-b9481dde1e90
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/juehang-vscode-mcp-server).
+
 ## Installation
 
 1. Install the extension from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=JuehangQin.vscode-mcp-server) or clone this repository and run `npm install` and `npm run compile` to build it.
