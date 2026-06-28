@@ -290,7 +290,7 @@ export function registerFileTools(
         `Searches text across workspace files with glob and context support.`,
         {
             query: z.string().describe('Text or regex pattern to search for'),
-            glob: z.string().optional().default('**/*').describe('VS Code glob include pattern'),
+            glob: z.string().optional().describe('REQUIRED: VS Code glob include pattern (e.g., "src/**/*.ts"). Must be explicitly specified.'),
             exclude: z.string().optional().default(DEFAULT_EXCLUDES).describe('VS Code glob exclude pattern'),
             caseSensitive: z.boolean().optional().default(false),
             regex: z.boolean().optional().default(true),
@@ -298,8 +298,19 @@ export function registerFileTools(
             contextLines: z.number().optional().default(0),
             format: z.enum(['text', 'json']).optional().default('text')
         },
-        async ({ query, glob = '**/*', exclude = DEFAULT_EXCLUDES, caseSensitive = false, regex = true, maxResults = 100, contextLines = 0, format = 'text' }): Promise<CallToolResult> => {
+        async ({ query, glob, exclude = DEFAULT_EXCLUDES, caseSensitive = false, regex = true, maxResults = 100, contextLines = 0, format = 'text' }): Promise<CallToolResult> => {
             const start = Date.now();
+            if (!glob || glob === '**/*') {
+                return toolResult({
+                    ok: false,
+                    summary: 'glob parameter is required',
+                    data: {
+                        error: 'The `glob` parameter is required. Please specify a file pattern to search (e.g., "src/**/*.ts", "*.json"). Searching all files without a glob is not allowed.',
+                        hint: 'Example: glob: "src/**/*.ts" to search only TypeScript files in src/'
+                    },
+                    durationMs: Date.now() - start
+                }, format as ToolFormat, 'Error: `glob` parameter is required. Please specify a file pattern (e.g., "src/**/*.ts").');
+            }
             const files = await vscode.workspace.findFiles(glob, exclude, 5000);
             const flags = caseSensitive ? 'g' : 'gi';
             const pattern = regex ? new RegExp(query, flags) : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
