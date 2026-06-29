@@ -8,6 +8,7 @@ import { registerShellTools } from './tools/shell-tools';
 import { registerDiagnosticsTools } from './tools/diagnostics-tools';
 import { registerSymbolTools } from './tools/symbol-tools';
 import { registerDiffTools } from './tools/diff-tools';
+import { toolResult, ToolFormat } from './tools/tool-utils';
 
 import { logger } from './utils/logger';
 
@@ -76,6 +77,25 @@ export class MCPServer {
         if (this.fileListingCallback) {
             logger.info(`Setting up MCP tools with configuration: ${JSON.stringify(this.toolConfig)}`);
             
+            // Wrap server.tool to catch all unhandled exceptions and convert them to structured error responses
+            const originalTool = (this.server as any).tool.bind(this.server);
+            (this.server as any).tool = (name: string, description: string, schema: any, handler: any) => {
+                const wrappedHandler = async (args: any, extra: any) => {
+                    try {
+                        return await handler(args, extra);
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        logger.error(`[${name}] Unhandled error: ${message}`);
+                        return toolResult({
+                            ok: false,
+                            summary: `Tool '${name}' failed: ${message}`,
+                            data: { error: message }
+                        }, 'text' as ToolFormat, `Error: ${message}`);
+                    }
+                };
+                return originalTool(name, description, schema, wrappedHandler);
+            };
+
             // Register file tools if enabled
             if (this.toolConfig.file) {
                 registerFileTools(this.server, this.fileListingCallback);

@@ -624,12 +624,19 @@ export function registerDiffTools(server: McpServer): void {
   // ---- apply_patch (单操作) ----
   server.tool(
     'apply_patch',
-    `对单个文件执行一次 patch 操作（add/update/delete/move）。参数为单个 patchOperationSchema 对象。`,
+    `对单个文件执行一次 patch 操作（add/update/delete/move）。参数已展平，直接传递 type/path/content 等字段即可。`,
     {
-      operation: patchOperationSchema,
+      type: z.enum(['add', 'update', 'delete', 'move']),
+      path: z.string().describe('File path relative to workspace root'),
+      content: z.string().optional().describe('Content for add operations'),
+      oldText: z.string().optional().describe('Exact text to replace for update operations'),
+      newText: z.string().optional().describe('Replacement text for update operations'),
+      targetPath: z.string().optional().describe('Target path for move operations'),
+      overwrite: z.boolean().optional().default(false),
       format: z.enum(['text', 'json']).optional().default('text')
     },
-    async ({ operation, format = 'text' }): Promise<CallToolResult> => {
+    async ({ type, path, content, oldText, newText, targetPath, overwrite = false, format = 'text' }): Promise<CallToolResult> => {
+      const operation = { type, path, content, oldText, newText, targetPath, overwrite };
       console.log(`[apply_patch] type=${operation.type} path=${operation.path}`);
       try {
         await applySinglePatch(operation);
