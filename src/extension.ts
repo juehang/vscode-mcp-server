@@ -8,12 +8,8 @@ export { MCPServer };
 
 let mcpServer: MCPServer | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
-let sharedTerminal: vscode.Terminal | undefined;
 // Server state - disabled by default
 let serverEnabled: boolean = false;
-
-// Terminal name constant
-const TERMINAL_NAME = 'MCP Shell Commands';
 
 /**
  * Gets the tool configuration from VS Code settings
@@ -26,33 +22,11 @@ function getToolConfiguration(): ToolConfiguration {
     return {
         file: enabledTools.file ?? true,
         edit: enabledTools.edit ?? true,
+        diff: enabledTools.diff ?? true,
         shell: enabledTools.shell ?? true,
         diagnostics: enabledTools.diagnostics ?? true,
         symbol: enabledTools.symbol ?? true
     };
-}
-
-/**
- * Gets or creates the shared terminal for the extension
- * @param context The extension context
- * @returns The shared terminal instance
- */
-export function getExtensionTerminal(context: vscode.ExtensionContext): vscode.Terminal {
-    // Check if a terminal with our name already exists
-    const existingTerminal = vscode.window.terminals.find(t => t.name === TERMINAL_NAME);
-    
-    if (existingTerminal && existingTerminal.exitStatus === undefined) {
-        // Reuse the existing terminal if it's still open
-        logger.info('[getExtensionTerminal] Reusing existing terminal for shell commands');
-        return existingTerminal;
-    }
-    
-    // Create a new terminal if it doesn't exist or if it has exited
-    sharedTerminal = vscode.window.createTerminal(TERMINAL_NAME);
-    logger.info('[getExtensionTerminal] Created new terminal for shell commands');
-    context.subscriptions.push(sharedTerminal);
-
-    return sharedTerminal;
 }
 
 // Function to update status bar
@@ -94,9 +68,8 @@ async function toggleServerState(context: vscode.ExtensionContext): Promise<void
         // Start the server if it was disabled
         if (!mcpServer) {
             logger.info(`[toggleServerState] Creating MCP server instance`);
-            const terminal = getExtensionTerminal(context);
             const toolConfig = getToolConfiguration();
-            mcpServer = new MCPServer(port, host, terminal, toolConfig);
+            mcpServer = new MCPServer(port, host, toolConfig);
             mcpServer.setFileListingCallback(async (path: string, recursive: boolean) => {
                 try {
                     return await listWorkspaceFiles(path, recursive);
@@ -172,12 +145,9 @@ export async function activate(context: vscode.ExtensionContext) {
         
         // Only start the server if enabled
         if (serverEnabled) {
-            // Create the shared terminal
-            const terminal = getExtensionTerminal(context);
-
-            // Initialize MCP server with the configured port, terminal, and tool configuration
+            // Initialize MCP server with the configured port and tool configuration
             const toolConfig = getToolConfiguration();
-            mcpServer = new MCPServer(port, host, terminal, toolConfig);
+            mcpServer = new MCPServer(port, host, toolConfig);
 
             // Set up file listing callback
             mcpServer.setFileListingCallback(async (path: string, recursive: boolean) => {
@@ -231,10 +201,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     const config = vscode.workspace.getConfiguration('vscode-mcp-server');
                     const port = config.get<number>('port') || 3000;
                     const host = config.get<string>('host') || '127.0.0.1';
-                    const terminal = getExtensionTerminal(context);
                     const toolConfig = getToolConfiguration();
                     
-                    mcpServer = new MCPServer(port, host, terminal, toolConfig);
+                    mcpServer = new MCPServer(port, host, toolConfig);
                     mcpServer.setFileListingCallback(async (path: string, recursive: boolean) => {
                         try {
                             return await listWorkspaceFiles(path, recursive);
@@ -269,12 +238,6 @@ export async function deactivate() {
     if (statusBarItem) {
         statusBarItem.dispose();
         statusBarItem = undefined;
-    }
-
-    // Dispose the shared terminal
-    if (sharedTerminal) {
-        sharedTerminal.dispose();
-        sharedTerminal = undefined;
     }
 
     if (!mcpServer) {

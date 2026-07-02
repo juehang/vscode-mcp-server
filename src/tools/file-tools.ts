@@ -3,6 +3,7 @@ import * as path from 'path';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from 'zod';
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { fileHash, resolveWorkspacePath, toolResult, ToolFormat, uriToWorkspacePath } from './tool-utils';
 
 // Type for file listing results
 export type FileListingResult = Array<{path: string, type: 'file' | 'directory'}>;
@@ -12,6 +13,7 @@ export type FileListingCallback = (path: string, recursive: boolean) => Promise<
 
 // Default maximum character count
 const DEFAULT_MAX_CHARACTERS = 100000;
+const DEFAULT_EXCLUDES = '**/{node_modules,.git,out,dist,build,coverage}/**';
 
 /**
  * Lists files and directories in the VS Code workspace
@@ -163,7 +165,7 @@ export function registerFileTools(
 ): void {
     // Add list_files tool
     server.tool(
-        'list_files_code',
+        'list_files',
         `Explores directory structure in VS Code workspace.
 
         WHEN TO USE: Understanding project structure, finding files before read/modify operations.
@@ -207,7 +209,7 @@ export function registerFileTools(
 
     // Update read_file tool with line number parameters
     server.tool(
-        'read_file_code',
+        'read_file',
         `Retrieves file contents with size limits and partial reading support.
 
         WHEN TO USE: Reading code, config files, analyzing implementations. Files >100k chars will fail.
@@ -251,9 +253,164 @@ export function registerFileTools(
         }
     );
 
+    server.tool(
+        'stat_file',
+        `Returns file or directory metadata without reading full file contents.`,
+        {
+            path: z.string().describe('Path relative to the workspace root'),
+            includeHash: z.boolean().optional().default(false).describe('Include sha256 for files'),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ path, includeHash = false, format = 'text' }): Promise<CallToolResult> => {
+            const start = Date.now();
+            const resolved = resolveWorkspacePath(path);
+            const stat = await vscode.workspace.fs.stat(resolved.uri);
+            const isFile = (stat.type & vscode.FileType.File) !== 0;
+            const isDirectory = (stat.type & vscode.FileType.Directory) !== 0;
+            const hash = includeHash && isFile ? await fileHash(resolved.uri) : undefined;
+            const data = {
+                path: resolved.relativePath,
+                type: isDirectory ? 'directory' : isFile ? 'file' : 'other',
+                size: stat.size,
+                createdAt: new Date(stat.ctime).toISOString(),
+                modifiedAt: new Date(stat.mtime).toISOString(),
+                hash
+            };
+            return toolResult({
+                ok: true,
+                summary: `${data.path}: ${data.type}, ${data.size} bytes`,
+                data,
+                durationMs: Date.now() - start
+            }, format as ToolFormat);
+        }
+    );
+
+    server.tool(
+        'search_text',
+        `Searches text across workspace files with glob and context support.`,
+        {
+            query: z.string().describe('Text or regex pattern to search for'),
+            glob: z.string().optional().describe('REQUIRED: VS Code glob include pattern (e.g., "src/**/*.ts"). Must be explicitly specified.'),
+            exclude: z.string().optional().default(DEFAULT_EXCLUDES).describe('VS Code glob exclude pattern'),
+            caseSensitive: z.boolean().optional().default(false),
+            regex: z.boolean().optional().default(true),
+            maxResults: z.number().optional().default(100),
+            contextLines: z.number().optional().default(0),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ query, glob, exclude = DEFAULT_EXCLUDES, caseSensitive = false, regex = true, maxResults = 100, contextLines = 0, format = 'text' }): Promise<CallToolResult> => {
+            const start = Date.now();
+            if (!glob || glob === '**/*') {
+                return toolResult({
+                    ok: false,
+                    summary: 'glob parameter is required',
+                    data: {
+                        error: 'The `glob` parameter is required. Please specify a file pattern to search (e.g., "src/**/*.ts", "*.json"). Searching all files without a glob is not allowed.',
+                        hint: 'Example: glob: "src/**/*.ts" to search only TypeScript files in src/'
+                    },
+                    durationMs: Date.now() - start
+                }, format as ToolFormat, 'Error: `glob` parameter is required. Please specify a file pattern (e.g., "src/**/*.ts").');
+            }
+            const files = await vscode.workspace.findFiles(glob, exclude, 5000);
+            const flags = caseSensitive ? 'g' : 'gi';
+            const pattern = regex ? new RegExp(query, flags) : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+            const matches: Array<{ file: string; line: number; column: number; text: string; before?: string[]; after?: string[] }> = [];
+
+            for (const uri of files) {
+                if (matches.length >= maxResults) {
+                    break;
+                }
+                let text: string;
+                try {
+                    const bytes = await vscode.workspace.fs.readFile(uri);
+                    if (bytes.length > 2 * 1024 * 1024) {
+                        continue;
+                    }
+                    text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+                } catch {
+                    continue;
+                }
+                const lines = text.split(/\r?\n/);
+                for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
+                    pattern.lastIndex = 0;
+                    const match = pattern.exec(lines[i]);
+                    if (match) {
+                        matches.push({
+                            file: uriToWorkspacePath(uri),
+                            line: i + 1,
+                            column: match.index + 1,
+                            text: lines[i],
+                            before: contextLines > 0 ? lines.slice(Math.max(0, i - contextLines), i) : undefined,
+                            after: contextLines > 0 ? lines.slice(i + 1, i + 1 + contextLines) : undefined
+                        });
+                    }
+                }
+            }
+
+            const text = matches.length === 0
+                ? `No matches for "${query}".`
+                : matches.map(match => `${match.file}:${match.line}:${match.column}: ${match.text}`).join('\n');
+            return toolResult({
+                ok: true,
+                summary: `Found ${matches.length} match(es) for "${query}"`,
+                data: { query, matches, truncated: matches.length >= maxResults },
+                durationMs: Date.now() - start
+            }, format as ToolFormat, text);
+        }
+    );
+
+    server.tool(
+        'summarize_workspace',
+        `Returns a compact workspace map with top-level files, language counts, and likely entry/config files.`,
+        {
+            maxFiles: z.number().optional().default(500),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ maxFiles = 500, format = 'text' }): Promise<CallToolResult> => {
+            const start = Date.now();
+            const files = await vscode.workspace.findFiles('**/*', DEFAULT_EXCLUDES, maxFiles);
+            const languageCounts: Record<string, number> = {};
+            const importantNames = new Set(['package.json', 'tsconfig.json', 'README.md', 'Cargo.toml', 'pyproject.toml', 'go.mod', 'pom.xml', 'build.gradle', 'vite.config.ts', 'next.config.js']);
+            const importantFiles: string[] = [];
+            const topLevel = new Set<string>();
+
+            for (const uri of files) {
+                const relative = uriToWorkspacePath(uri);
+                const parts = relative.split(/[\\/]/);
+                topLevel.add(parts[0]);
+                const ext = path.extname(relative) || '[no extension]';
+                languageCounts[ext] = (languageCounts[ext] || 0) + 1;
+                if (importantNames.has(path.basename(relative))) {
+                    importantFiles.push(relative);
+                }
+            }
+
+            const data = {
+                workspace: vscode.workspace.name,
+                fileCountSampled: files.length,
+                topLevel: Array.from(topLevel).sort(),
+                languageCounts,
+                importantFiles: importantFiles.sort()
+            };
+            const text = [
+                `Workspace: ${data.workspace ?? '(unnamed)'}`,
+                `Files sampled: ${data.fileCountSampled}`,
+                `Top level: ${data.topLevel.join(', ')}`,
+                `Important files:\n${data.importantFiles.map(file => `- ${file}`).join('\n') || '- (none found)'}`,
+                `Extensions:\n${Object.entries(languageCounts).sort((a, b) => b[1] - a[1]).map(([ext, count]) => `- ${ext}: ${count}`).join('\n')}`
+            ].join('\n\n');
+            return toolResult({
+                ok: true,
+                summary: `Workspace summary for ${data.workspace ?? 'workspace'}`,
+                data,
+                durationMs: Date.now() - start
+            }, format as ToolFormat, text);
+        }
+    );
+
     // Add move_file tool
     server.tool(
-        'move_file_code',
+        'move_file',
         `Moves a file or directory to a new location using VS Code's WorkspaceEdit API.
 
         WHEN TO USE: Reorganizing project structure, moving files between directories.
@@ -312,7 +469,7 @@ export function registerFileTools(
 
     // Add rename_file tool
     server.tool(
-        'rename_file_code',
+        'rename_file',
         `Renames a file or directory using VS Code's WorkspaceEdit API.
 
         WHEN TO USE: Renaming files to follow naming conventions, refactoring code.
@@ -373,7 +530,7 @@ export function registerFileTools(
 
     // Add copy_file tool
     server.tool(
-        'copy_file_code',
+        'copy_file',
         `Copies a file to a new location.
 
         WHEN TO USE: Creating backups, duplicating files for testing, creating template files.

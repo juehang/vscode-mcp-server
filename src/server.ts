@@ -1,19 +1,21 @@
 import express from "express";
-import * as vscode from 'vscode';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Server } from 'http';
-import { Request, Response } from 'express';
 import { registerFileTools, FileListingCallback } from './tools/file-tools';
 import { registerEditTools } from './tools/edit-tools';
 import { registerShellTools } from './tools/shell-tools';
 import { registerDiagnosticsTools } from './tools/diagnostics-tools';
 import { registerSymbolTools } from './tools/symbol-tools';
+import { registerDiffTools } from './tools/diff-tools';
+import { toolResult, ToolFormat } from './tools/tool-utils';
+
 import { logger } from './utils/logger';
 
 export interface ToolConfiguration {
     file: boolean;
     edit: boolean;
+    diff: boolean;
     shell: boolean;
     diagnostics: boolean;
     symbol: boolean;
@@ -27,20 +29,19 @@ export class MCPServer {
     private port: number;
     private host: string;
     private fileListingCallback?: FileListingCallback;
-    private terminal?: vscode.Terminal;
     private toolConfig: ToolConfiguration;
 
     public setFileListingCallback(callback: FileListingCallback) {
         this.fileListingCallback = callback;
     }
 
-    constructor(port: number = 3000, host: string = '127.0.0.1', terminal?: vscode.Terminal, toolConfig?: ToolConfiguration) {
+    constructor(port: number = 3000, host: string = '127.0.0.1', toolConfig?: ToolConfiguration) {
         this.port = port;
         this.host = host;
-        this.terminal = terminal;
         this.toolConfig = toolConfig || {
             file: true,
             edit: true,
+            diff: true,
             shell: true,
             diagnostics: true,
             symbol: true
@@ -76,6 +77,25 @@ export class MCPServer {
         if (this.fileListingCallback) {
             logger.info(`Setting up MCP tools with configuration: ${JSON.stringify(this.toolConfig)}`);
             
+            // Wrap server.tool to catch all unhandled exceptions and convert them to structured error responses
+            const originalTool = (this.server as any).tool.bind(this.server);
+            (this.server as any).tool = (name: string, description: string, schema: any, handler: any) => {
+                const wrappedHandler = async (args: any, extra: any) => {
+                    try {
+                        return await handler(args, extra);
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        logger.error(`[${name}] Unhandled error: ${message}`);
+                        return toolResult({
+                            ok: false,
+                            summary: `Tool '${name}' failed: ${message}`,
+                            data: { error: message }
+                        }, 'text' as ToolFormat, `Error: ${message}`);
+                    }
+                };
+                return originalTool(name, description, schema, wrappedHandler);
+            };
+
             // Register file tools if enabled
             if (this.toolConfig.file) {
                 registerFileTools(this.server, this.fileListingCallback);
@@ -94,7 +114,7 @@ export class MCPServer {
             
             // Register shell tools if enabled
             if (this.toolConfig.shell) {
-                registerShellTools(this.server, this.terminal);
+                registerShellTools(this.server);
                 logger.info('MCP shell tools registered successfully');
             } else {
                 logger.info('MCP shell tools disabled by configuration');
@@ -115,6 +135,16 @@ export class MCPServer {
             } else {
                 logger.info('MCP symbol tools disabled by configuration');
             }
+            
+            // Register diff tools if enabled
+            if (this.toolConfig.diff) {
+                registerDiffTools(this.server);
+                logger.info('MCP diff tools registered successfully');
+            } else {
+                logger.info('MCP diff tools disabled by configuration');
+            }
+
+
         } else {
             logger.warn('File listing callback not set during tools setup');
         }

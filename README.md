@@ -33,22 +33,22 @@ I also like to use this extension in a Claude project, as it allows me to specif
 You are working on an existing codebase, which you can access using your tools. These code tools interact with a VS Code workspace.
 
 WORKFLOW ESSENTIALS:
-1. Always start exploration with list_files_code on root directory (.) first
-2. CRITICAL: Run get_diagnostics_code after EVERY set of code changes before completing tasks
-3. For small edits (≤10 lines): use replace_lines_code with exact original content
-4. For large changes, new files, or uncertain content: use create_file_code with overwrite=true
+1. Always start exploration with list_files on root directory (.) first
+2. CRITICAL: Run get_diagnostics after EVERY set of code changes before completing tasks
+3. For small edits (≤10 lines): use replace_lines with exact original content
+4. For large changes, new files, or uncertain content: use create_file with overwrite=true
 
 EXPLORATION STRATEGY:
-- Start: list_files_code with path='.' (never recursive on root)
+- Start: list_files with path='.' (never recursive on root)
 - Understand structure: read key files like package.json, README, main entry points
-- Find symbols: use search_symbols_code for functions/classes, get_document_symbols_code for file overviews
-- Before editing: read_file_code the target file to understand current content
+- Find symbols: use search_symbols for functions/classes, get_document_symbols for file overviews
+- Before editing: read_file the target file to understand current content
 
 EDITING BEST PRACTICES:
-- Small modifications: replace_lines_code (requires exact original content match)
-- If replace_lines_code fails: read_file_code the target lines, then retry with correct content
-- Large changes: create_file_code with overwrite=true is more reliable
-- After any changes: get_diagnostics_code to check for errors
+- Small modifications: replace_lines (requires exact original content match)
+- If replace_lines fails: read_file the target lines, then retry with correct content
+- Large changes: create_file with overwrite=true is more reliable
+- After any changes: get_diagnostics to check for errors
 
 PLANNING REQUIREMENTS:
 Before making code modifications, present a comprehensive plan including:
@@ -60,7 +60,7 @@ Before making code modifications, present a comprehensive plan including:
 ERROR HANDLING:
 - Let errors happen naturally - don't add unnecessary try/catch blocks
 - For tool failures: follow the specific recovery guidance in each tool's description
-- If uncertain about file content: use read_file_code to verify before making changes
+- If uncertain about file content: use read_file to verify before making changes
 
 APPROVAL PROCESS:
 IMPORTANT: Only run code modification tools after presenting a plan and receiving explicit approval. Each change requires separate approval.
@@ -72,9 +72,9 @@ For context efficiency when exploring codebases, consider adding this to your CL
 ```
 ## VS Code Symbol Tools for Context Efficiency
 Use VS Code symbol tools to reduce context consumption:
-- `get_document_symbols_code` for file structure overview instead of reading entire files
-- `search_symbols_code` to find symbols by name across the project
-- `get_symbol_definition_code` for type info and docs without full file context
+- `get_document_symbols` for file structure overview instead of reading entire files
+- `search_symbols` to find symbols by name across the project
+- `get_symbol_definition` for type info and docs without full file context
 - Workflow: get outline → search symbols → get definitions → read implementation only when needed
 ```
 
@@ -113,58 +113,81 @@ The extension creates an MCP server that:
 ## Supported MCP Tools
 
 ### File Tools
-- **list_files_code**: Lists files and directories in your workspace
+- **list_files**: Lists files and directories in your workspace
   - Parameters:
     - `path`: The path to list files from
     - `recursive` (optional): Whether to list files recursively
 
-- **read_file_code**: Reads file contents
+- **read_file**: Reads file contents
   - Parameters:
     - `path`: The path to the file to read
     - `encoding` (optional): File encoding (default: utf-8)
     - `maxCharacters` (optional): Maximum character count (default: 100,000)
 
-- **move_file_code**: Moves a file or directory to a new location using VS Code's WorkspaceEdit API
+- **stat_file**: Returns file or directory metadata without reading full contents
+  - Parameters:
+    - `path`: Path relative to the workspace root
+    - `includeHash` (optional): Include SHA-256 for files
+    - `format` (optional): `text` or `json`
+
+- **search_text**: Searches workspace text with glob, regex, and context support
+  - Parameters:
+    - `query`: Text or regex pattern
+    - `glob` / `exclude` (optional): VS Code glob filters
+    - `caseSensitive`, `regex`, `maxResults`, `contextLines` (optional)
+    - `format` (optional): `text` or `json`
+
+- **summarize_workspace**: Returns a compact workspace map
+  - Parameters:
+    - `maxFiles` (optional): Maximum files to sample
+    - `format` (optional): `text` or `json`
+
+- **move_file**: Moves a file or directory to a new location using VS Code's WorkspaceEdit API
   - Parameters:
     - `sourcePath`: The current path of the file or directory to move
     - `targetPath`: The new path where the file or directory should be moved to
     - `overwrite` (optional): Whether to overwrite if target already exists (default: false)
 
-- **rename_file_code**: Renames a file or directory using VS Code's WorkspaceEdit API
+- **rename_file**: Renames a file or directory using VS Code's WorkspaceEdit API
   - Parameters:
     - `filePath`: The current path of the file or directory to rename
     - `newName`: The new name for the file or directory
     - `overwrite` (optional): Whether to overwrite if a file with the new name already exists (default: false)
 
-- **copy_file_code**: Copies a file to a new location using VS Code's file system API
+- **copy_file**: Copies a file to a new location using VS Code's file system API
   - Parameters:
     - `sourcePath`: The path of the file to copy
     - `targetPath`: The path where the copy should be created
     - `overwrite` (optional): Whether to overwrite if target already exists (default: false)
 
 ### Edit Tools
-- **create_file_code**: Creates a new file using VS Code's WorkspaceEdit API
+- **create_file**: Creates a new file using VS Code's WorkspaceEdit API
   - Parameters:
     - `path`: The path to the file to create
     - `content`: The content to write to the file
     - `overwrite` (optional): Whether to overwrite if the file exists (default: false)
     - `ignoreIfExists` (optional): Whether to ignore if the file exists (default: false)
 
-- **replace_lines_code**: Replaces specific lines in a file
+- **edit_file**: Replaces the first exact text match in a file
   - Parameters:
     - `path`: The path to the file to modify
-    - `startLine`: The start line number (1-based, inclusive)
-    - `endLine`: The end line number (1-based, inclusive)
-    - `content`: The new content to replace the lines with
-    - `originalCode`: The original code for validation
+    - `oldText`: Exact text to replace
+    - `newText`: Replacement text
+
+- **apply_diff** / **preview_diff**: Applies or previews a unified diff for one file
+
+- **apply_patch** / **preview_patch**: Applies or previews structured multi-file edits
+  - Operation types: `add`, `update`, `delete`, `move`
+  - Useful for coordinated changes across several files
 
 ### Diagnostics Tools
-- **get_diagnostics_code**: Checks for warnings and errors in your workspace
+- **get_diagnostics**: Checks for warnings and errors in your workspace
   - Parameters:
     - `path` (optional): File path to check (if not provided, checks the entire workspace)
     - `severities` (optional): Array of severity levels to include (0=Error, 1=Warning, 2=Information, 3=Hint). Default: [0, 1]
     - `format` (optional): Output format ('text' or 'json'). Default: 'text'
     - `includeSource` (optional): Whether to include the diagnostic source. Default: true
+    - `waitForDiagnostics`, `timeout`, `groupByFile`, `includeRelatedInformation` (optional)
 
   This tool is particularly useful for:
   - Code quality checks before committing changes
@@ -172,7 +195,7 @@ The extension creates an MCP server that:
   - Identifying problems in specific files or the entire workspace
 
 ### Symbol Tools
-- **search_symbols_code**: Searches for symbols across the workspace
+- **search_symbols**: Searches for symbols across the workspace
   - Parameters:
     - `query`: The search query for symbol names
     - `maxResults` (optional): Maximum number of results to return (default: 10)
@@ -182,7 +205,7 @@ The extension creates an MCP server that:
   - Exploring project structure and organization
   - Locating specific elements by name
 
-- **get_symbol_definition_code**: Gets definition information for a symbol in a file
+- **get_symbol_definition**: Gets definition information for a symbol in a file
   - Parameters:
     - `path`: The path to the file containing the symbol
     - `line`: The line number of the symbol
@@ -198,7 +221,7 @@ The extension creates an MCP server that:
   - Checking function signatures, type definitions, or documentation
   - Quick reference for APIs or library functions
 
-- **get_document_symbols_code**: Gets an outline of all symbols in a file, showing the hierarchical structure
+- **get_document_symbols**: Gets an outline of all symbols in a file, showing the hierarchical structure
   - Parameters:
     - `path`: The path to the file to analyze (relative to workspace)
     - `maxDepth` (optional): Maximum nesting depth to display
@@ -215,17 +238,37 @@ The extension creates an MCP server that:
   - Analyzing code architecture and relationships
   - Finding all symbols of specific types within a file
 
+- **find_references**: Finds references at a specific file position
+- **go_to_definition**: Gets definition locations at a specific file position
+- **rename_symbol**: Renames a symbol using VS Code language providers
+- **get_code_actions**: Lists available code actions for a file/range
+- **format_document**: Formats a document using VS Code format providers
+- **organize_imports**: Organizes imports for a document
+
 ### Shell Tools
-- **execute_shell_command_code**: Executes a shell command in the VS Code integrated terminal with shell integration
+- **execute_shell_command**: Executes a shell command. Short commands return output; long-running commands return a `sessionId`
   - Parameters:
     - `command`: The shell command to execute
     - `cwd` (optional): Optional working directory for the command (default: '.')
+    - `timeout`, `maxOutputCharacters`, `format` (optional)
+
+- **read_process_output**: Reads output from a running command session
+- **write_process_stdin**: Writes stdin to a running command session
+- **stop_process**: Stops a running command session
+- **list_processes**: Lists active command sessions
 
   This tool is useful for:
   - Running CLI commands and build operations
   - Executing git commands
   - Performing any shell operations that require terminal access
   - Getting command output for analysis and further processing
+
+### Git Tools
+- **git_status**: Returns workspace git status
+- **git_diff**: Returns unstaged or staged git diff
+- **git_log**: Returns recent commits
+- **git_show**: Shows a revision with stat and patch
+- **git_add**: Stages paths
 
 ## Caveats/TODO
 
@@ -236,7 +279,7 @@ Currently, only one workspace is supported. The extension also only works locall
 * `vscode-mcp-server.port`: The port number for the MCP server (default: 3000)
 * `vscode-mcp-server.host`: Host address for the MCP server (default: 127.0.0.1)
 * `vscode-mcp-server.defaultEnabled`: Whether the MCP server should be enabled by default on VS Code startup
-* `vscode-mcp-server.enabledTools`: Configure which tool categories are enabled (file, edit, shell, diagnostics, symbol)
+* `vscode-mcp-server.enabledTools`: Configure which tool categories are enabled (file, edit, diff, shell, diagnostics, symbol, git)
 
 **Selective Tool Configuration**: Useful for coding agents that already have certain capabilities. For example, with Claude Code you might disable file/edit tools and only enable symbol tools to add VS Code-specific symbol searching without tool duplication.
 

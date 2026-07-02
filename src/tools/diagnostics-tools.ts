@@ -84,7 +84,9 @@ function formatDiagnostics(
     diagnostics: [vscode.Uri, vscode.Diagnostic[]][], 
     severities: vscode.DiagnosticSeverity[],
     format: 'text' | 'json' = 'text',
-    includeSource: boolean = true
+    includeSource: boolean = true,
+    includeRelatedInformation: boolean = false,
+    groupByFile: boolean = false
 ): string | object {
     console.log(`[formatDiagnostics] Format: ${format}, Include source: ${includeSource}`);
     
@@ -96,6 +98,7 @@ function formatDiagnostics(
         severity: string;
         message: string;
         source?: string;
+        relatedInformation?: Array<{ file: string; line: number; column: number; message: string }>;
     }> = [];
     
     let totalIssues = 0;
@@ -124,6 +127,17 @@ function formatDiagnostics(
             if (includeSource && diagnostic.source) {
                 Object.assign(issue, { source: diagnostic.source });
             }
+
+            if (includeRelatedInformation && diagnostic.relatedInformation) {
+                Object.assign(issue, {
+                    relatedInformation: diagnostic.relatedInformation.map(info => ({
+                        file: uriToWorkspacePath(info.location.uri),
+                        line: info.location.range.start.line + 1,
+                        column: info.location.range.start.character + 1,
+                        message: info.message
+                    }))
+                });
+            }
             
             result.push(issue);
         }
@@ -131,6 +145,13 @@ function formatDiagnostics(
     
     // Return formatted result based on requested format
     if (format === 'json') {
+        if (groupByFile) {
+            return result.reduce<Record<string, typeof result>>((acc, issue) => {
+                acc[issue.file] = acc[issue.file] || [];
+                acc[issue.file].push(issue);
+                return acc;
+            }, {});
+        }
         return result;
     }
     
@@ -155,6 +176,10 @@ function formatDiagnostics(
     return output;
 }
 
+async function waitForDiagnosticsToSettle(timeoutMs: number): Promise<void> {
+    await new Promise<void>(resolve => setTimeout(resolve, Math.max(0, timeoutMs)));
+}
+
 /**
  * Registers MCP diagnostics-related tools with the server
  * @param server MCP server instance
@@ -162,7 +187,7 @@ function formatDiagnostics(
 export function registerDiagnosticsTools(server: McpServer): void {
     // Add get_diagnostics tool
     server.tool(
-        'get_diagnostics_code',
+        'get_diagnostics',
         `CRITICAL: Run this after EVERY series of code changes to check for errors before completing tasks.
 
         Analyzes code for warnings and errors using VS Code's integrated linters.
@@ -174,17 +199,24 @@ export function registerDiagnosticsTools(server: McpServer): void {
             path: z.string().optional().default('').describe('Optional file path to check. If not provided, checks the entire workspace. The file path must be a file, not a directory.'),
             severities: z.array(z.number()).optional().default([0, 1]).describe('Array of severity levels to include (0=Error, 1=Warning, 2=Information, 3=Hint)'),
             format: z.enum(['text', 'json']).optional().default('text').describe('Output format'),
-            includeSource: z.boolean().optional().default(true).describe('Whether to include the diagnostic source to identify which linter/extension flagged each issue')
+            includeSource: z.boolean().optional().default(true).describe('Whether to include the diagnostic source to identify which linter/extension flagged each issue'),
+            includeRelatedInformation: z.boolean().optional().default(false).describe('Whether to include related diagnostic locations'),
+            groupByFile: z.boolean().optional().default(false).describe('Group JSON output by file'),
+            waitForDiagnostics: z.boolean().optional().default(false).describe('Wait briefly before reading diagnostics'),
+            timeout: z.number().optional().default(1000).describe('Milliseconds to wait when waitForDiagnostics is true')
         },
-        async ({ path, severities = [0, 1], format = 'text', includeSource = true }): Promise<CallToolResult> => {
+        async ({ path, severities = [0, 1], format = 'text', includeSource = true, includeRelatedInformation = false, groupByFile = false, waitForDiagnostics = false, timeout = 1000 }): Promise<CallToolResult> => {
             console.log(`[get_diagnostics] Tool called with path=${path || 'all'}, severities=${severities.join(',')}, format=${format}`);
             
             try {
+                if (waitForDiagnostics) {
+                    await waitForDiagnosticsToSettle(timeout);
+                }
                 console.log('[get_diagnostics] Getting diagnostics');
                 const diagnostics = getDiagnostics(path);
                 
                 console.log(`[get_diagnostics] Found diagnostics for ${diagnostics.length} files`);
-                const formattedResult = formatDiagnostics(diagnostics, severities, format, includeSource);
+                const formattedResult = formatDiagnostics(diagnostics, severities, format, includeSource, includeRelatedInformation, groupByFile);
                 
                 const result: CallToolResult = {
                     content: [

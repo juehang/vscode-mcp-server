@@ -24,7 +24,8 @@ suite('Extension Test Suite', () => {
         mockMCPServer = {
             start: sinon.stub().resolves(),
             stop: sinon.stub().resolves(),
-            setFileListingCallback: sinon.spy()
+            setFileListingCallback: sinon.spy(),
+            setupTools: sinon.spy()
         };
         
         // Mock constructor for MCPServer
@@ -49,7 +50,21 @@ suite('Extension Test Suite', () => {
         
         // Mock configuration
         workspaceConfig = {
-            get: sinon.stub().withArgs('port').returns(4321)
+            get: sinon.stub().callsFake((key: string) => {
+                if (key === 'port') {
+                    return 4321;
+                }
+                if (key === 'host') {
+                    return '127.0.0.1';
+                }
+                if (key === 'defaultEnabled') {
+                    return true;
+                }
+                if (key === 'enabledTools') {
+                    return {};
+                }
+                return undefined;
+            })
         };
         getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration').returns(workspaceConfig);
         
@@ -92,7 +107,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(createStatusBarItemStub.called, true, 'Status bar item not created');
         
         // Check the status bar attributes
-        assert.strictEqual(statusBarItem.command, 'vscode-mcp-server.showServerInfo', 'Status bar command not set correctly');
+        assert.strictEqual(statusBarItem.command, 'vscode-mcp-server.toggleServer', 'Status bar command not set correctly');
         assert.strictEqual(statusBarItem.show.called, true, 'Status bar not shown');
         
         // Check that the text contains the port number

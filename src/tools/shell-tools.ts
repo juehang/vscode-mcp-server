@@ -1,142 +1,256 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from 'zod';
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { getWorkspaceRoot, resolveWorkspacePath, toolResult, ToolFormat } from './tool-utils';
 
-/**
- * Waits briefly for shell integration to become available
- * @param terminal The terminal to wait for
- * @param timeout Maximum time to wait in milliseconds
- * @returns Promise that resolves to true if shell integration became available
- */
-async function waitForShellIntegration(terminal: vscode.Terminal, timeout = 1000): Promise<boolean> {
-    if (terminal.shellIntegration) {
-        return true;
+interface ProcessSession {
+    id: string;
+    command: string;
+    cwd: string;
+    process: ChildProcessWithoutNullStreams;
+    output: string[];
+    exitCode?: number | null;
+    signal?: NodeJS.Signals | null;
+    startedAt: number;
+    lastReadIndex: number;
+}
+
+const sessions = new Map<string, ProcessSession>();
+let nextSessionId = 1;
+const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_MAX_OUTPUT = 20000;
+
+function trimOutput(text: string, maxCharacters: number): { text: string; truncated: boolean } {
+    if (text.length <= maxCharacters) {
+        return { text, truncated: false };
+    }
+    return {
+        text: text.slice(text.length - maxCharacters),
+        truncated: true
+    };
+}
+
+function createSession(command: string, cwd: string, timeout?: number): ProcessSession {
+    const id = String(nextSessionId++);
+
+    // ── Shell 检测 ──
+    // PowerShell 原生支持 Unicode，直接执行即可。
+    // cmd.exe 默认代码页为 GBK（中文系统），Node.js 的 toString() 以 UTF-8 解码会乱码，
+    // 因此自动加上 chcp 65001 切换代码页为 UTF-8。
+    const shellPath = vscode.env.shell || process.env.COMSPEC || 'cmd.exe';
+    const isCmd = path.basename(shellPath).toLowerCase() === 'cmd.exe';
+
+    const cmd = isCmd
+        ? `chcp 65001 >nul && ${command}`                     // cmd → 切 UTF-8
+        : `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8; ${command}`;  // PowerShell → 设 UTF-8
+
+    const child = spawn(cmd, {
+        cwd,
+        shell: shellPath,
+        env: process.env
+    });
+
+    const session: ProcessSession = {
+        id,
+        command,
+        cwd,
+        process: child,
+        output: [],
+        startedAt: Date.now(),
+        lastReadIndex: 0
+    };
+
+    child.stdout.on('data', (chunk: Buffer) => session.output.push(chunk.toString()));
+    child.stderr.on('data', (chunk: Buffer) => session.output.push(chunk.toString()));
+    child.on('close', (code, signal) => {
+        session.exitCode = code;
+        session.signal = signal;
+    });
+
+    if (timeout && timeout > 0) {
+        setTimeout(() => {
+            if (session.exitCode === undefined) {
+                child.kill();
+            }
+        }, timeout);
     }
 
-    return new Promise<boolean>(resolve => {
-        const timeoutId = setTimeout(() => {
-            disposable.dispose();
-            resolve(false);
-        }, timeout);
+    sessions.set(id, session);
+    return session;
+}
 
-        const disposable = vscode.window.onDidChangeTerminalShellIntegration(e => {
-            if (e.terminal === terminal && terminal.shellIntegration) {
-                clearTimeout(timeoutId);
-                disposable.dispose();
-                resolve(true);
-            }
+async function waitForSession(session: ProcessSession, timeout: number): Promise<void> {
+    if (session.exitCode !== undefined) {
+        return;
+    }
+
+    await new Promise<void>(resolve => {
+        const timer = setTimeout(resolve, timeout);
+        session.process.once('close', () => {
+            clearTimeout(timer);
+            resolve();
         });
     });
 }
 
-/**
- * Executes a shell command using terminal shell integration
- * @param terminal The terminal with shell integration
- * @param command The command to execute
- * @param cwd Optional working directory for the command
- * @param timeout Command timeout in milliseconds (default: 10000)
- * @returns Promise that resolves with the command output
- */
-export async function executeShellCommand(
-    terminal: vscode.Terminal,
-    command: string,
-    cwd?: string,
-    timeout: number = 10000
-): Promise<{ output: string }> {
-    terminal.show();
-    
-    // Build full command including cd if cwd is specified
-    let fullCommand = command;
-    if (cwd) {
-        if (cwd === '.' || cwd === './') {
-            fullCommand = `${command}`;
-        } else {
-            const quotedPath = cwd.includes(' ') ? `"${cwd}"` : cwd;
-            fullCommand = `cd ${quotedPath} && ${command}`;
-        }
+function getSessionOutput(session: ProcessSession, sinceLastRead: boolean, maxCharacters: number) {
+    const chunks = sinceLastRead ? session.output.slice(session.lastReadIndex) : session.output;
+    if (sinceLastRead) {
+        session.lastReadIndex = session.output.length;
     }
-    
-    // Create timeout promise
-    const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Command timed out after ${timeout}ms`)), timeout);
-    });
-    
-    // Create execution promise
-    const executionPromise = async (): Promise<{ output: string }> => {
-        // Execute the command using shell integration API
-        const execution = terminal.shellIntegration!.executeCommand(fullCommand);
-        
-        // Capture output using the stream
-        let output = '';
-        
-        try {
-            // Access the read stream (handling possible API differences)
-            const outputStream = (execution as any).read();
-            for await (const data of outputStream) {
-                output += data;
-            }
-        } catch (error) {
-            throw new Error(`Failed to read command output: ${error}`);
-        }
-        
-        return { output };
-    };
-    
-    // Race between execution and timeout
-    return Promise.race([executionPromise(), timeoutPromise]);
+    return trimOutput(chunks.join(''), maxCharacters);
 }
 
-/**
- * Registers MCP shell-related tools with the server
- * @param server MCP server instance
- * @param terminal The terminal to use for command execution
- */
-export function registerShellTools(server: McpServer, terminal?: vscode.Terminal): void {
-    // Add execute_shell_command tool
+export function registerShellTools(server: McpServer): void {
     server.tool(
-        'execute_shell_command_code',
-        `Executes shell commands in VS Code integrated terminal.
-
-        WHEN TO USE: Running CLI commands, builds, git operations, npm/pip installs.
-        
-        Working directory: Use cwd to run commands in specific directories. Defaults to workspace root. If you get unexpected results, ensure the cwd is correct.
-
-        Timeout: Commands must complete within specified time (default 10s) or the tool will return a timeout error, but the command may still be running in the terminal.`,
+        'execute_shell_command',
+        `Executes a shell command. Short commands return a completed result; long-running commands return a sessionId for polling or stdin writes.`,
         {
             command: z.string().describe('The shell command to execute'),
-            cwd: z.string().optional().default('.').describe('Optional working directory for the command'),
-            timeout: z.number().optional().default(10000).describe('Command timeout in milliseconds (default: 10000)')
+            cwd: z.string().optional().default('.').describe('Working directory relative to the workspace root'),
+            timeout: z.number().optional().default(DEFAULT_TIMEOUT_MS).describe('Milliseconds to wait before returning a session for ongoing commands'),
+            maxOutputCharacters: z.number().optional().default(DEFAULT_MAX_OUTPUT).describe('Maximum output characters to return'),
+            format: z.enum(['text', 'json']).optional().default('text')
         },
-        async ({ command, cwd, timeout = 10000 }): Promise<CallToolResult> => {
-            try {
-                if (!terminal) {
-                    throw new Error('Terminal not available');
-                }
-                
-                // Check for shell integration - wait briefly if not available
-                if (!terminal.shellIntegration) {
-                    const shellIntegrationAvailable = await waitForShellIntegration(terminal);
-                    if (!shellIntegrationAvailable) {
-                        throw new Error('Shell integration not available in terminal');
-                    }
-                }
-                
-                const { output } = await executeShellCommand(terminal, command, cwd, timeout);
-                
-                const result: CallToolResult = {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Command: ${command}\n\nOutput:\n${output}`
-                        }
-                    ]
-                };
-                return result;
-            } catch (error) {
-                console.error('[execute_shell_command] Error in tool:', error);
-                throw error;
+        async ({ command, cwd = '.', timeout = DEFAULT_TIMEOUT_MS, maxOutputCharacters = DEFAULT_MAX_OUTPUT, format = 'text' }): Promise<CallToolResult> => {
+            const start = Date.now();
+            const workdir = cwd === '.' ? getWorkspaceRoot() : resolveWorkspacePath(cwd).fsPath;
+            const session = createSession(command, workdir, 0);
+            await waitForSession(session, timeout);
+
+            const output = getSessionOutput(session, false, maxOutputCharacters);
+            const running = session.exitCode === undefined;
+            const data = {
+                command,
+                cwd: workdir,
+                sessionId: running ? session.id : undefined,
+                running,
+                exitCode: session.exitCode,
+                signal: session.signal,
+                output: output.text,
+                truncated: output.truncated
+            };
+
+            if (!running) {
+                sessions.delete(session.id);
             }
+
+            return toolResult({
+                ok: !running && session.exitCode === 0,
+                summary: running
+                    ? `Command is still running in session ${session.id}`
+                    : `Command exited with code ${session.exitCode}`,
+                data,
+                durationMs: Date.now() - start
+            }, format as ToolFormat, `$ ${command}\n${output.truncated ? '[output truncated]\n' : ''}${output.text}${running ? `\n[session_id: ${session.id}]` : `\n[exit_code: ${session.exitCode}]`}`);
+        }
+    );
+
+    server.tool(
+        'read_process_output',
+        `Reads output from a running shell session.`,
+        {
+            sessionId: z.string().describe('Session id returned by execute_shell_command or start_process'),
+            sinceLastRead: z.boolean().optional().default(true).describe('Only return output not previously read'),
+            maxOutputCharacters: z.number().optional().default(DEFAULT_MAX_OUTPUT),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ sessionId, sinceLastRead = true, maxOutputCharacters = DEFAULT_MAX_OUTPUT, format = 'text' }): Promise<CallToolResult> => {
+            const session = sessions.get(sessionId);
+            if (!session) {
+                throw new Error(`Unknown process session: ${sessionId}`);
+            }
+
+            const output = getSessionOutput(session, sinceLastRead, maxOutputCharacters);
+            const running = session.exitCode === undefined;
+            const data = {
+                sessionId,
+                running,
+                exitCode: session.exitCode,
+                signal: session.signal,
+                output: output.text,
+                truncated: output.truncated
+            };
+
+            if (!running && sinceLastRead) {
+                sessions.delete(sessionId);
+            }
+
+            return toolResult({
+                ok: true,
+                summary: running ? `Session ${sessionId} is still running` : `Session ${sessionId} exited with code ${session.exitCode}`,
+                data
+            }, format as ToolFormat, `${output.truncated ? '[output truncated]\n' : ''}${output.text}${running ? '' : `\n[exit_code: ${session.exitCode}]`}`);
+        }
+    );
+
+    server.tool(
+        'write_process_stdin',
+        `Writes text to a running shell session stdin.`,
+        {
+            sessionId: z.string(),
+            chars: z.string().describe('Characters to write to stdin'),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ sessionId, chars, format = 'text' }): Promise<CallToolResult> => {
+            const session = sessions.get(sessionId);
+            if (!session) {
+                throw new Error(`Unknown process session: ${sessionId}`);
+            }
+            session.process.stdin.write(chars);
+            return toolResult({
+                ok: true,
+                summary: `Wrote ${chars.length} characters to session ${sessionId}`,
+                data: { sessionId, written: chars.length }
+            }, format as ToolFormat);
+        }
+    );
+
+    server.tool(
+        'stop_process',
+        `Stops a running shell session.`,
+        {
+            sessionId: z.string(),
+            signal: z.string().optional().default('SIGTERM'),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ sessionId, signal = 'SIGTERM', format = 'text' }): Promise<CallToolResult> => {
+            const session = sessions.get(sessionId);
+            if (!session) {
+                throw new Error(`Unknown process session: ${sessionId}`);
+            }
+            session.process.kill(signal as NodeJS.Signals);
+            return toolResult({
+                ok: true,
+                summary: `Sent ${signal} to session ${sessionId}`,
+                data: { sessionId, signal }
+            }, format as ToolFormat);
+        }
+    );
+
+    server.tool(
+        'list_processes',
+        `Lists active shell sessions.`,
+        {
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ format = 'text' }): Promise<CallToolResult> => {
+            const data = Array.from(sessions.values()).map(session => ({
+                sessionId: session.id,
+                command: session.command,
+                cwd: session.cwd,
+                running: session.exitCode === undefined,
+                exitCode: session.exitCode,
+                startedAt: new Date(session.startedAt).toISOString()
+            }));
+            return toolResult({
+                ok: true,
+                summary: `${data.length} process session(s)`,
+                data
+            }, format as ToolFormat, JSON.stringify(data, null, 2));
         }
     );
 }

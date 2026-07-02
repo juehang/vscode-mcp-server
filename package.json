@@ -3,7 +3,7 @@
   "icon": "media/logo.png",
   "displayName": "vscode-mcp-server",
   "description": "VS Code as a MCP server",
-  "version": "0.4.0",
+  "version": "0.4.4",
   "repository": "https://github.com/juehang/vscode-mcp-server",
   "publisher": "JuehangQin",
   "license": "MIT",
@@ -43,9 +43,11 @@
           "default": {
             "file": true,
             "edit": true,
+            "diff": true,
             "shell": true,
             "diagnostics": true,
-            "symbol": true
+            "symbol": true,
+            "git": true
           },
           "properties": {
             "file": {
@@ -55,6 +57,10 @@
             "edit": {
               "type": "boolean",
               "description": "Enable file editing tools (create, edit, delete files)"
+            },
+            "diff": {
+              "type": "boolean",
+              "description": "Enable unified diff editing tools (apply_diff, preview_diff, apply_patch, preview_patch)"
             },
             "shell": {
               "type": "boolean",
@@ -67,6 +73,10 @@
             "symbol": {
               "type": "boolean",
               "description": "Enable code symbol and structure analysis tools"
+            },
+            "git": {
+              "type": "boolean",
+              "description": "Enable git workflow tools"
             }
           },
           "description": "Configure which MCP tools are enabled"

@@ -5,6 +5,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as path from 'path';
 import * as fs from 'fs';
 import { logger } from '../utils/logger';
+import { toolResult, ToolFormat } from './tool-utils';
 
 /**
  * Convert a symbol kind to a string representation
@@ -397,9 +398,9 @@ export async function getDocumentSymbols(
  * @param server MCP server instance
  */
 export function registerSymbolTools(server: McpServer): void {
-    // Add search_symbols_code tool
+    // Add search_symbols tool
     server.tool(
-        'search_symbols_code',
+        'search_symbols',
         `Searches for symbols (functions, classes, variables) across workspace using fuzzy matching.
 
         WHEN TO USE: Finding function/class definitions, exploring project structure, locating specific elements.
@@ -411,10 +412,10 @@ export function registerSymbolTools(server: McpServer): void {
             maxResults: z.number().optional().default(10).describe('Maximum number of results to return (default: 10)')
         },
         async ({ query, maxResults = 10 }): Promise<CallToolResult> => {
-            logger.info(`[search_symbols_code] Tool called with query="${query}", maxResults=${maxResults}`);
+            logger.info(`[search_symbols] Tool called with query="${query}", maxResults=${maxResults}`);
             
             try {
-                logger.info('[search_symbols_code] Searching workspace symbols');
+                logger.info('[search_symbols] Searching workspace symbols');
                 const result = await searchWorkspaceSymbols(query, maxResults);
                 
                 let resultText: string;
@@ -447,22 +448,22 @@ export function registerSymbolTools(server: McpServer): void {
                         }
                     ]
                 };
-                logger.info('[search_symbols_code] Successfully completed');
+                logger.info('[search_symbols] Successfully completed');
                 return callResult;
             } catch (error) {
-                logger.error(`[search_symbols_code] Error in tool: ${error instanceof Error ? error.message : String(error)}`);
+                logger.error(`[search_symbols] Error in tool: ${error instanceof Error ? error.message : String(error)}`);
                 throw error;
             }
         }
     );
 
-    // Add get_symbol_definition_code tool with updated parameters
+    // Add get_symbol_definition tool with updated parameters
     server.tool(
-        'get_symbol_definition_code',
+        'get_symbol_definition',
         `Gets definition information for a symbol using hover data (type, docs, source).
 
         WHEN TO USE: Understanding what a symbol represents, checking function signatures, quick API reference.
-        USE search_symbols_code instead for: finding symbols by name across the project.
+        USE search_symbols instead for: finding symbols by name across the project.
         
         Requires exact symbol name and line number. If symbol not found on line, returns clear message.`,
         {
@@ -471,7 +472,7 @@ export function registerSymbolTools(server: McpServer): void {
             symbol: z.string().describe('The symbol name to look for on the specified line')
         },
         async ({ path, line, symbol }): Promise<CallToolResult> => {
-            logger.info(`[get_symbol_definition_code] Tool called with path="${path}", line=${line}, symbol="${symbol}"`);
+            logger.info(`[get_symbol_definition] Tool called with path="${path}", line=${line}, symbol="${symbol}"`);
             
             // Convert 1-based input to 0-based for VS Code API
             const zeroBasedLine = line - 1;
@@ -549,22 +550,22 @@ export function registerSymbolTools(server: McpServer): void {
                         }
                     ]
                 };
-                logger.info('[get_symbol_definition_code] Successfully completed');
+                logger.info('[get_symbol_definition] Successfully completed');
                 return callResult;
             } catch (error) {
-                logger.error(`[get_symbol_definition_code] Error in tool: ${error instanceof Error ? error.message : String(error)}`);
+                logger.error(`[get_symbol_definition] Error in tool: ${error instanceof Error ? error.message : String(error)}`);
                 throw error;
             }
         }
     );
 
-    // Add get_document_symbols_code tool
+    // Add get_document_symbols tool
     server.tool(
-        'get_document_symbols_code',
+        'get_document_symbols',
         `Gets complete symbol outline for a file showing hierarchical structure and line numbers.
 
-        WHEN TO USE: Understanding file structure, getting overview of all symbols, finding symbol positions. This tool should be be preferred over reading the file using read_file_code when only an overview of the file is needed.
-        USE search_symbols_code instead for: finding specific symbols by name across the project.
+        WHEN TO USE: Understanding file structure, getting overview of all symbols, finding symbol positions. This tool should be be preferred over reading the file using read_file when only an overview of the file is needed.
+        USE search_symbols instead for: finding specific symbols by name across the project.
         
         Shows classes, functions, methods, variables with line ranges. Use maxDepth for large files to avoid deep nesting.`,
         {
@@ -572,7 +573,7 @@ export function registerSymbolTools(server: McpServer): void {
             maxDepth: z.number().optional().describe('Maximum nesting depth to display (optional)')
         },
         async ({ path, maxDepth }): Promise<CallToolResult> => {
-            logger.info(`[get_document_symbols_code] Tool called with path="${path}", maxDepth=${maxDepth}`);
+            logger.info(`[get_document_symbols] Tool called with path="${path}", maxDepth=${maxDepth}`);
             
             try {
                 if (!vscode.workspace.workspaceFolders) {
@@ -590,7 +591,7 @@ export function registerSymbolTools(server: McpServer): void {
                     throw new Error(`File not found: ${path}`);
                 }
                 
-                logger.info('[get_document_symbols_code] Getting document symbols');
+                logger.info('[get_document_symbols] Getting document symbols');
                 const result = await getDocumentSymbols(uri, maxDepth);
                 
                 let resultText: string;
@@ -633,12 +634,201 @@ export function registerSymbolTools(server: McpServer): void {
                         }
                     ]
                 };
-                logger.info('[get_document_symbols_code] Successfully completed');
+                logger.info('[get_document_symbols] Successfully completed');
                 return callResult;
             } catch (error) {
-                logger.error(`[get_document_symbols_code] Error in tool: ${error instanceof Error ? error.message : String(error)}`);
+                logger.error(`[get_document_symbols] Error in tool: ${error instanceof Error ? error.message : String(error)}`);
                 throw error;
             }
+        }
+    );
+
+    server.tool(
+        'find_references',
+        `Finds references for a symbol at a line and character position.`,
+        {
+            path: z.string(),
+            line: z.number().describe('1-based line number'),
+            character: z.number().describe('0-based character offset'),
+            maxResults: z.number().optional().default(50),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ path, line, character, maxResults = 50, format = 'text' }): Promise<CallToolResult> => {
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder open');
+            }
+            const uri = vscode.Uri.file(require('path').resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, path));
+            const locations = await vscode.commands.executeCommand<vscode.Location[]>(
+                'vscode.executeReferenceProvider',
+                uri,
+                new vscode.Position(line - 1, character)
+            ) || [];
+            const references = locations.slice(0, maxResults).map(location => ({
+                file: uriToWorkspacePath(location.uri),
+                line: location.range.start.line + 1,
+                character: location.range.start.character
+            }));
+            return toolResult({
+                ok: true,
+                summary: `Found ${locations.length} reference(s)`,
+                data: { references, total: locations.length }
+            }, format as ToolFormat, references.map(ref => `${ref.file}:${ref.line}:${ref.character}`).join('\n'));
+        }
+    );
+
+    server.tool(
+        'go_to_definition',
+        `Gets definition locations for a symbol at a line and character position.`,
+        {
+            path: z.string(),
+            line: z.number().describe('1-based line number'),
+            character: z.number().describe('0-based character offset'),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ path, line, character, format = 'text' }): Promise<CallToolResult> => {
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder open');
+            }
+            const uri = vscode.Uri.file(require('path').resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, path));
+            const definitions = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+                'vscode.executeDefinitionProvider',
+                uri,
+                new vscode.Position(line - 1, character)
+            ) || [];
+            const locations = definitions.map(definition => {
+                if ('targetUri' in definition) {
+                    return {
+                        file: uriToWorkspacePath(definition.targetUri),
+                        line: definition.targetRange.start.line + 1,
+                        character: definition.targetRange.start.character
+                    };
+                }
+                return {
+                    file: uriToWorkspacePath(definition.uri),
+                    line: definition.range.start.line + 1,
+                    character: definition.range.start.character
+                };
+            });
+            return toolResult({
+                ok: true,
+                summary: `Found ${locations.length} definition location(s)`,
+                data: { locations }
+            }, format as ToolFormat, locations.map(location => `${location.file}:${location.line}:${location.character}`).join('\n'));
+        }
+    );
+
+    server.tool(
+        'rename_symbol',
+        `Renames a symbol using VS Code language provider support.`,
+        {
+            path: z.string(),
+            line: z.number().describe('1-based line number'),
+            character: z.number().describe('0-based character offset'),
+            newName: z.string(),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ path, line, character, newName, format = 'text' }): Promise<CallToolResult> => {
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder open');
+            }
+            const uri = vscode.Uri.file(require('path').resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, path));
+            const edit = await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
+                'vscode.executeDocumentRenameProvider',
+                uri,
+                new vscode.Position(line - 1, character),
+                newName
+            );
+            if (!edit) {
+                throw new Error('Rename provider did not return edits');
+            }
+            const success = await vscode.workspace.applyEdit(edit);
+            await vscode.workspace.saveAll(false);
+            return toolResult({
+                ok: success,
+                summary: success ? `Renamed symbol to ${newName}` : 'Rename failed',
+                data: { path, line, character, newName }
+            }, format as ToolFormat);
+        }
+    );
+
+    server.tool(
+        'get_code_actions',
+        `Gets available code actions for a file or range.`,
+        {
+            path: z.string(),
+            startLine: z.number().optional().default(1),
+            endLine: z.number().optional(),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ path, startLine = 1, endLine, format = 'text' }): Promise<CallToolResult> => {
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder open');
+            }
+            const uri = vscode.Uri.file(require('path').resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, path));
+            const document = await vscode.workspace.openTextDocument(uri);
+            const range = new vscode.Range(startLine - 1, 0, (endLine ?? startLine) - 1, document.lineAt((endLine ?? startLine) - 1).text.length);
+            const actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
+                'vscode.executeCodeActionProvider',
+                uri,
+                range
+            ) || [];
+            const data = actions.map((action, index) => ({ index, title: action.title, kind: action.kind?.value }));
+            return toolResult({
+                ok: true,
+                summary: `Found ${data.length} code action(s)`,
+                data
+            }, format as ToolFormat, data.map(action => `${action.index}: ${action.title}${action.kind ? ` (${action.kind})` : ''}`).join('\n'));
+        }
+    );
+
+    server.tool(
+        'format_document',
+        `Formats a document using VS Code format providers.`,
+        {
+            path: z.string(),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ path, format = 'text' }): Promise<CallToolResult> => {
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder open');
+            }
+            const uri = vscode.Uri.file(require('path').resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, path));
+            const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+                'vscode.executeFormatDocumentProvider',
+                uri,
+                {}
+            ) || [];
+            const workspaceEdit = new vscode.WorkspaceEdit();
+            workspaceEdit.set(uri, edits);
+            const success = await vscode.workspace.applyEdit(workspaceEdit);
+            await vscode.workspace.saveAll(false);
+            return toolResult({
+                ok: success,
+                summary: success ? `Formatted ${path} with ${edits.length} edit(s)` : `Failed to format ${path}`,
+                data: { path, edits: edits.length }
+            }, format as ToolFormat);
+        }
+    );
+
+    server.tool(
+        'organize_imports',
+        `Organizes imports for a document using VS Code code actions.`,
+        {
+            path: z.string(),
+            format: z.enum(['text', 'json']).optional().default('text')
+        },
+        async ({ path, format = 'text' }): Promise<CallToolResult> => {
+            if (!vscode.workspace.workspaceFolders) {
+                throw new Error('No workspace folder open');
+            }
+            const uri = vscode.Uri.file(require('path').resolve(vscode.workspace.workspaceFolders[0].uri.fsPath, path));
+            await vscode.commands.executeCommand('editor.action.organizeImports', uri);
+            await vscode.workspace.saveAll(false);
+            return toolResult({
+                ok: true,
+                summary: `Organized imports for ${path}`,
+                data: { path }
+            }, format as ToolFormat);
         }
     );
 }

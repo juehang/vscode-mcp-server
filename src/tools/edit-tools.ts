@@ -104,22 +104,30 @@ export async function replaceWorkspaceFileLines(
             throw new Error(`End line ${endLine + 1} is out of range (${startLine + 1}-${document.lineCount})`);
         }
         
-        // Get the current content of the lines
-        const currentLines = [];
-        for (let i = startLine; i <= endLine; i++) {
-            currentLines.push(document.lineAt(i).text);
-        }
-        const currentContent = currentLines.join('\n');
+        // Get the text within the specified line range
+        const rangeStartOffset = document.offsetAt(new vscode.Position(startLine, 0));
+        const rangeEndOffset = endLine < document.lineCount - 1
+            ? document.offsetAt(new vscode.Position(endLine + 1, 0))
+            : document.getText().length;
+        const rangeText = document.getText().substring(rangeStartOffset, rangeEndOffset);
         
-        // Compare with the provided original code
-        if (currentContent !== originalCode) {
-            throw new Error(`Original code validation failed. The current content does not match the provided original code.`);
+        // Search for originalCode as substring (like desktop_edit_block)
+        const matchIndex = rangeText.indexOf(originalCode);
+        if (matchIndex === -1) {
+            const preview = rangeText.length > 200 
+                ? rangeText.substring(0, 200) + '...' 
+                : rangeText;
+            throw new Error(
+                `Original code not found in lines ${startLine + 1}-${endLine + 1}. ` +
+                `Line range content preview:\n${preview}`
+            );
         }
         
-        // Create a range for the lines to replace
-        const startPos = new vscode.Position(startLine, 0);
-        const endPos = new vscode.Position(endLine, document.lineAt(endLine).text.length);
-        const range = new vscode.Range(startPos, endPos);
+        // Calculate exact position of the match
+        const matchOffset = rangeStartOffset + matchIndex;
+        const matchStartPos = document.positionAt(matchOffset);
+        const matchEndPos = document.positionAt(matchOffset + originalCode.length);
+        const matchRange = new vscode.Range(matchStartPos, matchEndPos);
         
         // Get the active text editor or show the document
         let editor = vscode.window.activeTextEditor;
@@ -129,7 +137,7 @@ export async function replaceWorkspaceFileLines(
         
         // Apply the edit
         const success = await editor.edit((editBuilder) => {
-            editBuilder.replace(range, content);
+            editBuilder.replace(matchRange, content);
         });
         
         if (success) {
@@ -148,20 +156,180 @@ export async function replaceWorkspaceFileLines(
 }
 
 /**
+ * Escapes special regex characters for literal string matching
+ */
+function escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Counts regex matches in a file without modifying it (preview helper)
+ */
+async function countRegexMatches(
+    fileUri: vscode.Uri,
+    pattern: string,
+    literal: boolean = false,
+    startLine?: number,
+    endLine?: number
+): Promise<{ count: number; searchText: string }> {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    const fullText = document.getText();
+
+    let searchText: string;
+    let rangeStartOffset: number;
+    let rangeEndOffset: number;
+
+    if (startLine === undefined && endLine === undefined) {
+        searchText = fullText;
+        rangeStartOffset = 0;
+        rangeEndOffset = fullText.length;
+    } else {
+        const start = startLine !== undefined ? Math.max(0, startLine - 1) : 0;
+        const end = endLine !== undefined ? Math.min(document.lineCount - 1, endLine - 1) : document.lineCount - 1;
+        if (start > end) {
+            throw new Error(`startLine (${startLine}) cannot be greater than endLine (${endLine})`);
+        }
+        rangeStartOffset = document.offsetAt(new vscode.Position(start, 0));
+        rangeEndOffset = end < document.lineCount - 1
+            ? document.offsetAt(new vscode.Position(end + 1, 0))
+            : fullText.length;
+        searchText = fullText.substring(rangeStartOffset, rangeEndOffset);
+    }
+
+    let regex: RegExp;
+    try {
+        regex = literal
+            ? new RegExp(escapeRegex(pattern), 'g')
+            : new RegExp(pattern, 'gm');
+    } catch (e) {
+        throw new Error(`Invalid regex pattern: ${pattern} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    const matches = searchText.match(regex);
+    return { count: matches ? matches.length : 0, searchText };
+}
+
+/**
+ * Replaces text in a file using regex pattern matching — no line numbers needed!
+ * @param workspacePath The path within the workspace to the file
+ * @param pattern The regex pattern (or literal string if literal=true)
+ * @param replacement The replacement string
+ * @param literal Whether to treat pattern as literal string (default false = regex)
+ * @param expectedReplacements Required: expected number of replacements, throws if mismatch (prevents accidental mass-replacements like $ matching every line)
+ * @param startLine Optional: 1-based start line (inclusive), default 1 = beginning
+ * @param endLine Optional: 1-based end line (inclusive), default = end of file
+ * @returns Number of replacements made
+ */
+export async function replaceWorkspaceFileByRegex(
+    workspacePath: string,
+    pattern: string,
+    replacement: string,
+    literal: boolean = false,
+    expectedReplacements: number,
+    startLine?: number,
+    endLine?: number
+): Promise<number> {
+    console.log(`[replaceWorkspaceFileByRegex] path: ${workspacePath}, pattern: ${pattern}, literal: ${literal}, startLine: ${startLine}, endLine: ${endLine}`);
+    
+    if (!vscode.workspace.workspaceFolders) {
+        throw new Error('No workspace folder is open');
+    }
+
+    const workspaceFolder = vscode.workspace.workspaceFolders[0];
+    const workspaceUri = workspaceFolder.uri;
+    const fileUri = vscode.Uri.joinPath(workspaceUri, workspacePath);
+    
+    try {
+        const document = await vscode.workspace.openTextDocument(fileUri);
+        const fullText = document.getText();
+        
+        // Use helper to count matches and get search text range
+        const { count: actualCount, searchText } = await countRegexMatches(fileUri, pattern, literal, startLine, endLine);
+        
+        // Calculate the full document offset range
+        let rangeStartOffset: number;
+        let rangeEndOffset: number;
+        
+        if (startLine === undefined && endLine === undefined) {
+            rangeStartOffset = 0;
+            rangeEndOffset = fullText.length;
+        } else {
+            const start = startLine !== undefined ? Math.max(0, startLine - 1) : 0;
+            const end = endLine !== undefined ? Math.min(document.lineCount - 1, endLine - 1) : document.lineCount - 1;
+            rangeStartOffset = document.offsetAt(new vscode.Position(start, 0));
+            rangeEndOffset = end < document.lineCount - 1 
+                ? document.offsetAt(new vscode.Position(end + 1, 0))
+                : fullText.length;
+        }
+        
+        // Verify expected count matches actual (required, prevents accidents like $ matching every line)
+        if (actualCount !== expectedReplacements) {
+            throw new Error(
+                `Expected ${expectedReplacements} replacement(s), but pattern matched ${actualCount} time(s). ` +
+                `No changes were made.`
+            );
+        }
+        
+        if (actualCount === 0) {
+            return 0; // No matches, nothing to do
+        }
+        
+        // Build regex for replacement
+        let replaceRegex: RegExp;
+        try {
+            replaceRegex = literal
+                ? new RegExp(escapeRegex(pattern), 'g')
+                : new RegExp(pattern, 'gm');
+        } catch (e) {
+            throw new Error(`Invalid regex pattern: ${pattern} — ${e instanceof Error ? e.message : String(e)}`);
+        }
+        
+        // Perform replacement only within the specified range
+        const newSearchText = searchText.replace(replaceRegex, replacement);
+        const newText = fullText.substring(0, rangeStartOffset) + newSearchText + fullText.substring(rangeEndOffset);
+        
+        // Apply via WorkspaceEdit (full document replace)
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        const fullRange = new vscode.Range(
+            document.positionAt(0),
+            document.positionAt(fullText.length)
+        );
+        workspaceEdit.replace(fileUri, fullRange, newText);
+        
+        const success = await vscode.workspace.applyEdit(workspaceEdit);
+        
+        if (success) {
+            await document.save();
+            console.log(`[replaceWorkspaceFileByRegex] ${actualCount} replacement(s) made`);
+        } else {
+            throw new Error(`Failed to apply regex replacement to file: ${fileUri.fsPath}`);
+        }
+        
+        return actualCount;
+    } catch (error) {
+        console.error('[replaceWorkspaceFileByRegex] Error:', error);
+        throw error;
+    }
+}
+
+/**
  * Registers MCP edit-related tools with the server
  * @param server MCP server instance
+ * 
+ * 注意: replace_lines / replace_regex / preview_regex 已被屏蔽。
+ * 请使用 diff-tools.ts 中的 edit_file / apply_diff / preview_diff。
  */
 export function registerEditTools(server: McpServer): void {
     // Add create_file tool
     server.tool(
-        'create_file_code',
+        'create_file',
         `Creates new files or completely rewrites existing files.
 
         WHEN TO USE: New files, large modifications (>10 lines), complete file rewrites.
-        USE replace_lines_code instead for: small edits ≤10 lines where you have exact original content.
+        For small edits, use edit_file or apply_diff instead.
 
         File handling: Use overwrite=true to replace existing files, ignoreIfExists=true to skip if file exists.
-        Always check with list_files_code first unless you specifically want to overwrite.`,
+        Always check with list_files first unless you specifically want to overwrite.`,
         {
             path: z.string().describe('The path to the file to create'),
             content: z.string().describe('The content to write to the file'),
@@ -192,50 +360,8 @@ export function registerEditTools(server: McpServer): void {
         }
     );
 
-    // Add replace_lines_code tool
-    server.tool(
-        'replace_lines_code',
-        `Replaces specific lines in existing files with exact content validation.
-
-        WHEN TO USE: Modifications ≤10 lines where you have exact original text, or inserts of any size.
-        USE create_file_code instead for: new files, large modifications (>10 lines, hard to match exact content), or when original text is uncertain.
-
-        CRITICAL: originalCode parameter must match current file content exactly or tool fails.
-        If tool fails: run read_file_code on target lines to get current content, then retry.
-
-        Parameters use 1-based line numbers. Always verify line numbers with read_file_code if unsure.`,
-        {
-            path: z.string().describe('The path to the file to modify'),
-            startLine: z.number().describe('The start line number (1-based, inclusive)'),
-            endLine: z.number().describe('The end line number (1-based, inclusive)'),
-            content: z.string().describe('The new content to replace the lines with'),
-            originalCode: z.string().describe('The original code for validation - must match exactly')
-        },
-        async ({ path, startLine, endLine, content, originalCode }): Promise<CallToolResult> => {
-            console.log(`[replace_lines_code] Tool called with path=${path}, startLine=${startLine}, endLine=${endLine}`);
-            
-            // Convert 1-based input to 0-based for VS Code API
-            const zeroBasedStartLine = startLine - 1;
-            const zeroBasedEndLine = endLine - 1;
-            
-            try {
-                console.log('[replace_lines_code] Replacing lines');
-                await replaceWorkspaceFileLines(path, zeroBasedStartLine, zeroBasedEndLine, content, originalCode);
-                
-                const result: CallToolResult = {
-                    content: [
-                        {
-                            type: 'text',
-                            text: `Lines ${startLine}-${endLine} in file ${path} replaced successfully`
-                        }
-                    ]
-                };
-                console.log('[replace_lines_code] Successfully completed');
-                return result;
-            } catch (error) {
-                console.error('[replace_lines_code] Error in tool:', error);
-                throw error;
-            }
-        }
-    );
+    // ⛔ 以下工具已屏蔽，请使用 diff-tools.ts 中的替代工具:
+    // - replace_lines → edit_file（精确文本匹配替换）
+    // - replace_regex → apply_diff（unified diff 编辑）
+    // - preview_regex → preview_diff（diff 预览）
 }
