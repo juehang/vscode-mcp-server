@@ -20,8 +20,7 @@ export interface ToolConfiguration {
 }
 
 export class MCPServer {
-    private server: McpServer;
-    private transport: StreamableHTTPServerTransport;
+    private toolsReady = false;
     private app: express.Application;
     private httpServer?: Server;
     private port: number;
@@ -48,8 +47,23 @@ export class MCPServer {
         this.app = express();
         this.app.use(express.json());
 
-        // Initialize MCP Server
-        this.server = new McpServer({
+        // Note: setupTools() is no longer called here
+        this.setupRoutes();
+        this.setupEventHandlers();
+    }
+    
+    public setupTools(): void {
+        if (this.fileListingCallback) {
+            logger.info(`Setting up MCP tools with configuration: ${JSON.stringify(this.toolConfig)}`);
+            this.toolsReady = true;
+        } else {
+            logger.warn('File listing callback not set during tools setup');
+        }
+    }
+
+    // In stateless mode the SDK requires a fresh server + transport per request
+    private createServer(): McpServer {
+        const server = new McpServer({
             name: "vscode-mcp-server",
             version: "1.0.0",
         }, {
@@ -60,63 +74,51 @@ export class MCPServer {
                 }
             }
         });
-
-        // Initialize transport
-        this.transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: undefined,
-        });
-
-        // Note: setupTools() is no longer called here
-        this.setupRoutes();
-        this.setupEventHandlers();
+        if (!this.toolsReady || !this.fileListingCallback) {
+            return server;
+        }
+        if (this.toolConfig.file) {
+            registerFileTools(server, this.fileListingCallback);
+        }
+        if (this.toolConfig.edit) {
+            registerEditTools(server);
+        }
+        if (this.toolConfig.shell) {
+            registerShellTools(server, this.terminal);
+        }
+        if (this.toolConfig.diagnostics) {
+            registerDiagnosticsTools(server);
+        }
+        if (this.toolConfig.symbol) {
+            registerSymbolTools(server);
+        }
+        return server;
     }
-    
-    public setupTools(): void {
-        // Register tools from the tools module based on configuration
-        if (this.fileListingCallback) {
-            logger.info(`Setting up MCP tools with configuration: ${JSON.stringify(this.toolConfig)}`);
-            
-            // Register file tools if enabled
-            if (this.toolConfig.file) {
-                registerFileTools(this.server, this.fileListingCallback);
-                logger.info('MCP file tools registered successfully');
-            } else {
-                logger.info('MCP file tools disabled by configuration');
+
+    private async handleMcpRequest(req: Request, res: Response, body: unknown): Promise<void> {
+        try {
+            const server = this.createServer();
+            const transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: undefined,
+            });
+            res.on('close', () => {
+                transport.close();
+                server.close();
+            });
+            await server.connect(transport);
+            await transport.handleRequest(req, res, body);
+        } catch (error) {
+            logger.error(`Error handling MCP request: ${error instanceof Error ? error.message : String(error)}`);
+            if (!res.headersSent) {
+                res.status(500).json({
+                    jsonrpc: '2.0',
+                    error: {
+                        code: -32603,
+                        message: 'Internal server error',
+                    },
+                    id: null,
+                });
             }
-            
-            // Register edit tools if enabled
-            if (this.toolConfig.edit) {
-                registerEditTools(this.server);
-                logger.info('MCP edit tools registered successfully');
-            } else {
-                logger.info('MCP edit tools disabled by configuration');
-            }
-            
-            // Register shell tools if enabled
-            if (this.toolConfig.shell) {
-                registerShellTools(this.server, this.terminal);
-                logger.info('MCP shell tools registered successfully');
-            } else {
-                logger.info('MCP shell tools disabled by configuration');
-            }
-            
-            // Register diagnostics tools if enabled
-            if (this.toolConfig.diagnostics) {
-                registerDiagnosticsTools(this.server);
-                logger.info('MCP diagnostics tools registered successfully');
-            } else {
-                logger.info('MCP diagnostics tools disabled by configuration');
-            }
-            
-            // Register symbol tools if enabled
-            if (this.toolConfig.symbol) {
-                registerSymbolTools(this.server);
-                logger.info('MCP symbol tools registered successfully');
-            } else {
-                logger.info('MCP symbol tools disabled by configuration');
-            }
-        } else {
-            logger.warn('File listing callback not set during tools setup');
         }
     }
 
@@ -124,41 +126,13 @@ export class MCPServer {
         // Handle POST requests for client-to-server communication
         this.app.post('/mcp', async (req, res) => {
             logger.info(`Request received: ${req.method} ${req.url}`);
-            try {
-                await this.transport.handleRequest(req, res, req.body);
-            } catch (error) {
-                logger.error(`Error handling MCP request: ${error instanceof Error ? error.message : String(error)}`);
-                if (!res.headersSent) {
-                    res.status(500).json({
-                        jsonrpc: '2.0',
-                        error: {
-                            code: -32603,
-                            message: 'Internal server error',
-                        },
-                        id: null,
-                    });
-                }
-            }
+            await this.handleMcpRequest(req, res, req.body);
         });
 
         // Handle SSE endpoint for server-to-client streaming
         this.app.get('/mcp/sse', async (req, res) => {
             logger.info('Received SSE connection request');
-            try {
-                await this.transport.handleRequest(req, res, undefined);
-            } catch (error) {
-                logger.error(`Error handling SSE request: ${error instanceof Error ? error.message : String(error)}`);
-                if (!res.headersSent) {
-                    res.status(500).json({
-                        jsonrpc: '2.0',
-                        error: {
-                            code: -32603,
-                            message: 'Internal server error',
-                        },
-                        id: null,
-                    });
-                }
-            }
+            await this.handleMcpRequest(req, res, undefined);
         });
 
         // Handle unsupported methods
@@ -216,13 +190,6 @@ export class MCPServer {
         try {
             logger.info('[MCPServer.start] Starting MCP server');
             const startTime = Date.now();
-
-            // Connect transport before starting server
-            logger.info('[MCPServer.start] Connecting transport');
-            const transportConnectStart = Date.now();
-            await this.server.connect(this.transport);
-            const transportConnectTime = Date.now() - transportConnectStart;
-            logger.info(`[MCPServer.start] Transport connected (took ${transportConnectTime}ms)`);
 
             // Start HTTP server
             logger.info('[MCPServer.start] Starting HTTP server');
@@ -283,19 +250,6 @@ export class MCPServer {
                 ]);
             }
 
-            // Rest of the shutdown process...
-            logger.info('[MCPServer.stop] Closing transport');
-            const transportCloseStart = Date.now();
-            await this.transport.close();
-            const transportCloseTime = Date.now() - transportCloseStart;
-            logger.info(`[MCPServer.stop] Transport closed (took ${transportCloseTime}ms)`);
-            
-            logger.info('[MCPServer.stop] Closing MCP server');
-            const serverCloseStart = Date.now();
-            await this.server.close();
-            const serverCloseTime = Date.now() - serverCloseStart;
-            logger.info(`[MCPServer.stop] MCP server closed (took ${serverCloseTime}ms)`);
-            
             const totalStopTime = Date.now() - stopStartTime;
             logger.info(`[MCPServer.stop] MCP Server shutdown complete (total: ${totalStopTime}ms)`);
         } catch (error) {
